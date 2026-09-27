@@ -1,0 +1,2 @@
+ALTER TABLE "district_telegram_groups" ADD COLUMN "transport" text DEFAULT 'BOT_API' NOT NULL;--> statement-breakpoint
+ALTER TABLE "district_telegram_groups" ADD CONSTRAINT "district_telegram_groups_transport_check" CHECK ("district_telegram_groups"."transport" IN ('BOT_API', 'USERBOT'));

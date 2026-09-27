@@ -1,0 +1,3 @@
+ALTER TABLE "audit_events" ADD COLUMN "district_id" text;--> statement-breakpoint
+ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_district_id_districts_id_fk" FOREIGN KEY ("district_id") REFERENCES "public"."districts"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "audit_events_district_created_idx" ON "audit_events" USING btree ("district_id","created_at");

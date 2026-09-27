@@ -1,0 +1,34 @@
+{
+  "name": "mahalla-ovozi-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @mahalla-ovozi/web test:e2e",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @mahalla-ovozi/backend db:migrate",
+    "reconcile-restore": "pnpm --filter @mahalla-ovozi/backend reconcile-restore",
+    "preview:web": "pnpm --filter @mahalla-ovozi/web preview",
+    "tunnel": "cloudflared tunnel --url http://localhost:5173",
+    "vps:status": "ssh airnet-vps \"cd /opt/mahalla-ovozi && docker compose ps\"",
+    "vps:logs": "ssh airnet-vps \"cd /opt/mahalla-ovozi && docker compose logs --tail=100\""
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "argon2",
+      "esbuild"
+    ]
+  },
+  "packageManager": "pnpm@10.34.1",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  }
+}

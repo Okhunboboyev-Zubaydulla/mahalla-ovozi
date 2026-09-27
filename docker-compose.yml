@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: mahalla-ovozi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mahalla_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mahalla_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-mahalla_ovozi}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mahalla_user} -d ${POSTGRES_DB:-mahalla_ovozi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

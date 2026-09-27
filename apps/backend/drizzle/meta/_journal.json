@@ -1,0 +1,209 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786950820215,
+      "tag": "0000_burly_george_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786961316476,
+      "tag": "0001_wise_the_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787033390352,
+      "tag": "0002_strong_reavers",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787039553208,
+      "tag": "0003_sticky_wong",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787070197250,
+      "tag": "0004_icy_vance_astro",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787080000000,
+      "tag": "0005_warm_hokim_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787160000000,
+      "tag": "0006_district_activation",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787306695944,
+      "tag": "0007_common_bromley",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787385271435,
+      "tag": "0008_amused_mongoose",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787397951404,
+      "tag": "0009_vengeful_doctor_octopus",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787405924299,
+      "tag": "0010_old_prodigy",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787495309546,
+      "tag": "0011_big_taskmaster",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787637652166,
+      "tag": "0012_heavy_human_robot",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787677325950,
+      "tag": "0013_shocking_omega_flight",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1787790134986,
+      "tag": "0014_closed_spirit",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1787799165291,
+      "tag": "0015_soft_tony_stark",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1787800000000,
+      "tag": "0016_subscription_records",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787810000000,
+      "tag": "0017_subscription_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787915645753,
+      "tag": "0018_silent_amphibian",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788048998181,
+      "tag": "0019_cute_puma",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788264000000,
+      "tag": "0020_burst_debounce",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788762000000,
+      "tag": "0021_drop_global_analysis_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788770000000,
+      "tag": "0022_add_topic_projections_latest_update",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788780000000,
+      "tag": "0023_intake_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788790000000,
+      "tag": "0024_topics_status_check",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789748156550,
+      "tag": "0025_sloppy_the_watchers",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789748550248,
+      "tag": "0026_sweet_turbo",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1789750890612,
+      "tag": "0027_broken_molecule_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1789800582989,
+      "tag": "0028_elite_black_bird",
+      "breakpoints": true
+    }
+  ]
+}

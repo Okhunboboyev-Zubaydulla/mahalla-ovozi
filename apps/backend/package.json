@@ -1,0 +1,48 @@
+{
+  "name": "@mahalla-ovozi/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/entrypoints/http.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx/esm src/adapters/db/migrate.ts",
+    "dev": "node --watch --env-file-if-exists=.env --import tsx/esm src/entrypoints/http.ts",
+    "worker": "node --watch --env-file-if-exists=.env --import tsx/esm src/entrypoints/worker.ts",
+    "userbot": "node --watch --env-file-if-exists=.env --import tsx/esm src/entrypoints/userbot.ts",
+    "cli:manage-po": "node --env-file-if-exists=.env --import tsx/esm src/cli/manage-product-owner.ts",
+    "cli:bootstrap-userbot": "node --env-file-if-exists=.env --import tsx/esm src/cli/bootstrap-userbot-session.ts",
+    "cli:clean-test-data": "node --env-file-if-exists=.env --import tsx/esm src/cli/clean-test-data.ts",
+    "cli:purge-messages": "node --env-file-if-exists=.env --import tsx/esm src/cli/purge-messages.ts",
+    "purge-messages": "node --env-file-if-exists=.env --import tsx/esm src/cli/purge-messages.ts",
+    "cli:view-evidence": "node --env-file-if-exists=.env --import tsx/esm src/cli/view-evidence.ts",
+    "cli:verify-deepinfra": "node --env-file-if-exists=.env --import tsx/esm src/cli/verify-deepinfra.ts",
+    "cli:reconcile-retention": "node --env-file-if-exists=.env --import tsx/esm src/cli/reconcile-retention.ts",
+    "reconcile-restore": "node --env-file-if-exists=.env --import tsx/esm src/entrypoints/reconcile-restore.ts"
+  },
+  "dependencies": {
+    "@fastify/compress": "^9.2.0",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.0.0",
+    "@mahalla-ovozi/api-contracts": "workspace:*",
+    "argon2": "^0.41.1",
+    "dotenv": "catalog:",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.2.1",
+    "fastify-type-provider-zod": "^4.0.2",
+    "pg": "^8.13.3",
+    "pg-boss": "^10.4.2",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/pg": "^8.11.11",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.19.3",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
