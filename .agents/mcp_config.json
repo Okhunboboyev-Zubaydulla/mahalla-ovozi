@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "grepai": {
+      "command": "C:/Users/Zubaydulla/AppData/Local/Programs/grepai/grepai.exe",
+      "args": [
+        "mcp-serve",
+        "C:/codevision-works/mahalla-ovozi-trial-2"
+      ]
+    }
+  }
+}

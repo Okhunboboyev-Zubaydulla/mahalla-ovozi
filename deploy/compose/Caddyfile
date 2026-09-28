@@ -1,0 +1,45 @@
+(mahalla_app) {
+    root * /srv/web
+    encode gzip zstd
+
+    # Security headers (F7.5)
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+
+    # 1. Mutually exclusive API reverse proxy
+    handle /api/* {
+        reverse_proxy backend:3000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # 2. Mutually exclusive SPA file server
+    handle /assets/* {
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+    }
+
+    handle {
+        header Cache-Control "no-cache, must-revalidate"
+        try_files {path} /index.html
+        file_server
+    }
+}
+
+# Domain HTTPS with automatic Let's Encrypt / ZeroSSL TLS
+mahalla-ovozi.uz, www.mahalla-ovozi.uz {
+    import mahalla_app
+}
+
+# Plain HTTP for direct VPS IP access redirects to canonical domain
+http://95.182.118.3 {
+    redir https://mahalla-ovozi.uz{uri} permanent
+}

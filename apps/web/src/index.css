@@ -1,0 +1,77 @@
+:root {
+  --mahalla-focus: #007A7C;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --antd-motion-duration-slow: 0ms;
+    --antd-motion-duration-mid: 0ms;
+    --antd-motion-duration-fast: 0ms;
+  }
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: #F5F7F6;
+  color: #172321;
+}
+
+/* Custom focus ring utility for keyboard navigation */
+.mahalla-focus-visible:focus-visible {
+  outline: 2px solid var(--mahalla-focus);
+  outline-offset: 2px;
+}
+
+/* Refined, ultra-subtle floating scrollbar for lane columns */
+.lane-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+}
+
+.lane-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lane-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lane-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+
+.lane-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+}
+
+/* Bold emphasis for selected Segmented tabs */
+.ant-segmented .ant-segmented-item-selected {
+  font-weight: 600 !important;
+}
+
+/* Hide lane drag handle on tablet and mobile viewports to preserve native swipe gestures */
+@media (max-width: 1023px) {
+  .lane-drag-handle {
+    display: none !important;
+  }
+}
+

@@ -1,0 +1,136 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mahalla-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mahalla_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Database password required}
+      POSTGRES_DB: ${POSTGRES_DB:-mahalla_ovozi}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-mahalla_user} -d $${POSTGRES_DB:-mahalla_ovozi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - mahalla-net
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: runner
+    container_name: mahalla-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mahalla_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mahalla_ovozi}
+      TOMBSTONE_STORE_PATH: /app/deploy/backup/tombstones.json
+    volumes:
+      - ../backup:/app/deploy/backup
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    extra_hosts:
+      - "api.telegram.org:149.154.167.220"
+    networks:
+      - mahalla-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/v1/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: runner
+    container_name: mahalla-worker
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@mahalla-ovozi/backend", "exec", "node", "--import", "tsx/esm", "src/entrypoints/worker.ts"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mahalla_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mahalla_ovozi}
+      TOMBSTONE_STORE_PATH: /app/deploy/backup/tombstones.json
+    volumes:
+      - ../backup:/app/deploy/backup
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    extra_hosts:
+      - "api.telegram.org:149.154.167.220"
+    networks:
+      - mahalla-net
+
+  userbot:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: runner
+    container_name: mahalla-userbot
+    restart: unless-stopped
+    command: ["pnpm", "--filter", "@mahalla-ovozi/backend", "exec", "node", "--import", "tsx/esm", "src/entrypoints/userbot.ts"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mahalla_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mahalla_ovozi}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    networks:
+      - mahalla-net
+
+  caddy:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: caddy
+    container_name: mahalla-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - mahalla-net
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  mahalla-net:
+    driver: bridge
