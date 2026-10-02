@@ -19,13 +19,27 @@ import { formatTashkentDate } from '../lib/formatters.js';
 
 const { Title, Paragraph } = Typography;
 
+/**
+ * Surfaces the real failure reason when the API client carries one, so a server error
+ * (code and message) is not indistinguishable from a network outage.
+ */
+function resolveErrorDescription(error: unknown): string {
+  if (error instanceof ApiError) {
+    return `${error.message} (код: ${error.code})`;
+  }
+  if (error instanceof Error && error.message !== '') {
+    return error.message;
+  }
+  return 'Сервер билан боғланишда хатолик юз берди. Илтимос, қайта уриниб кўринг.';
+}
+
 export const ArchivedMahallasPage: React.FC = () => {
   const queryClient = useQueryClient();
   const { message } = AntdApp.useApp();
 
   const [deleteTarget, setDeleteTarget] = useState<ArchivedMahallaListItemDto | null>(null);
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: archivedMahallaQueryKeys.list(),
     queryFn: () => archivedMahallasClient.listArchivedMahallas(),
   });
@@ -152,7 +166,7 @@ export const ArchivedMahallasPage: React.FC = () => {
             type="error"
             showIcon
             message="Архивланган маҳаллалар рўйхатини юклаб бўлмади"
-            description="Сервер билан боғланишда хатолик юз берди. Илтимос, қайта уриниб кўринг."
+            description={resolveErrorDescription(error)}
             action={
               <Button type="primary" danger onClick={() => void refetch()}>
                 Қайта уриниш

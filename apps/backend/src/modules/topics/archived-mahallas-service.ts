@@ -56,6 +56,20 @@ export class ArchivedMahallaConfirmationMismatchError extends Error {
 }
 
 /**
+ * Normalises an `archived_at` cell to an ISO string.
+ *
+ * Raw `sql` queries bypass Drizzle's column type parsers, so pg hands this column back as a
+ * string, while a Drizzle-typed select hands back a Date. Both shapes are accepted here.
+ */
+function toIsoStringOrNull(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+/**
  * Lists every ARCHIVED topic joined to its district, ordered by district name then mahalla name.
  *
  * `archivedAt` is the topic's updated_at: the topics table has no dedicated archived_at column,
@@ -67,7 +81,7 @@ export async function listArchivedMahallas(db: DbClient): Promise<ArchivedMahall
     district_id: string;
     district_name: string;
     mahalla_name: string;
-    archived_at: Date | null;
+    archived_at: Date | string | null;
     evidence_count: number;
     projection_count: number;
   }>(sql`
@@ -96,7 +110,7 @@ export async function listArchivedMahallas(db: DbClient): Promise<ArchivedMahall
     districtId: row.district_id,
     districtName: row.district_name,
     mahallaName: row.mahalla_name,
-    archivedAt: row.archived_at ? row.archived_at.toISOString() : null,
+    archivedAt: toIsoStringOrNull(row.archived_at),
     evidenceCount: Number(row.evidence_count),
     projectionCount: Number(row.projection_count),
   }));
