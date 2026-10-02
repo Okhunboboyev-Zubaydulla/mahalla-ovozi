@@ -47,6 +47,9 @@ export function useTelegramGroups(districtId: string | null) {
         queryClient.invalidateQueries({
           queryKey: districtQueryKeys.readiness(districtId),
         });
+        queryClient.invalidateQueries({
+          queryKey: districtQueryKeys.mahallas(districtId),
+        });
       }
     },
   });
@@ -70,6 +73,9 @@ export function useTelegramGroups(districtId: string | null) {
         queryClient.invalidateQueries({
           queryKey: districtQueryKeys.readiness(districtId),
         });
+        queryClient.invalidateQueries({
+          queryKey: districtQueryKeys.mahallas(districtId),
+        });
       }
     },
   });
@@ -88,6 +94,9 @@ export function useTelegramGroups(districtId: string | null) {
         });
         queryClient.invalidateQueries({
           queryKey: districtQueryKeys.readiness(districtId),
+        });
+        queryClient.invalidateQueries({
+          queryKey: districtQueryKeys.mahallas(districtId),
         });
       }
     },

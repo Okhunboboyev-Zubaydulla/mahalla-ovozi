@@ -11,10 +11,12 @@ import {
   districtTelegramBots,
   districtTelegramGroups,
   auditEvents,
+  topics,
 } from '../src/adapters/db/schema/index.js';
 import { encryptToken } from '../src/adapters/crypto/token-cipher.js';
 import { globalTestSessionManager } from '../src/modules/telegram-groups/telegram-test-session-store.js';
 import { deriveWebhookSecret } from '../src/modules/telegram-intake/webhook-security.js';
+import { getTashkentCalendarDay } from '../src/modules/telegram-intake/timezone-util.js';
 
 const SAME_ORIGIN_HEADERS = { 'sec-fetch-site': 'same-origin' } as const;
 
@@ -725,5 +727,102 @@ describe('Telegram Groups Management & Validation Integration Tests', () => {
       .from(districtTelegramGroups)
       .where(eq(districtTelegramGroups.id, groupId));
     expect(deleted).toBeUndefined();
+  });
+
+  it('archives orphaned ACTIVE topics of the deleted group mahalla, leaving other mahallas untouched', async () => {
+    const sentinelMahalla = 'СИНОВ АРХИВ МАҲАЛЛАСИ';
+    const controlMahalla = 'СИНОВ НАЗОРАТ МАҲАЛЛАСИ';
+    const groupId = `dtg_${crypto.randomUUID()}`;
+    const controlGroupId = `dtg_${crypto.randomUUID()}`;
+    const sentinelTopicId = `top_${crypto.randomUUID()}`;
+    const controlTopicId = `top_${crypto.randomUUID()}`;
+    const calendarDay = getTashkentCalendarDay(Math.floor(Date.now() / 1000));
+
+    await db.insert(districtTelegramGroups).values({
+      id: groupId,
+      districtId: testDistrictId,
+      mahallaName: sentinelMahalla,
+      telegramChatId: `-100${crypto.randomUUID().replace(/\D/g, '').slice(0, 10)}`,
+      telegramChatTitle: 'Sinov Arxiv Guruhi',
+      status: 'VALID',
+    });
+
+    // Positive control: another mahalla in the SAME district keeps its own live group mapping.
+    await db.insert(districtTelegramGroups).values({
+      id: controlGroupId,
+      districtId: testDistrictId,
+      mahallaName: controlMahalla,
+      telegramChatId: `-100${crypto.randomUUID().replace(/\D/g, '').slice(0, 10)}`,
+      telegramChatTitle: 'Sinov Nazorat Guruhi',
+      status: 'VALID',
+    });
+
+    try {
+      // Orphaned ACTIVE topic belonging to the mahalla whose group is about to be deleted.
+      // retentionExpiresAt is far in the future, so it is unambiguously inside the retention window.
+      await db.insert(topics).values({
+        id: sentinelTopicId,
+        districtId: testDistrictId,
+        mahallaName: sentinelMahalla,
+        calendarDay,
+        primaryLane: 'WATER',
+        status: 'ACTIVE',
+        latestRelevantEvidenceTimestamp: new Date(),
+        retentionExpiresAt: new Date(Date.now() + 90 * 86400 * 1000),
+      });
+
+      // Control topic for a mahalla that still has a live group: must stay ACTIVE.
+      await db.insert(topics).values({
+        id: controlTopicId,
+        districtId: testDistrictId,
+        mahallaName: controlMahalla,
+        calendarDay,
+        primaryLane: 'WATER',
+        status: 'ACTIVE',
+        latestRelevantEvidenceTimestamp: new Date(),
+        retentionExpiresAt: new Date(Date.now() + 90 * 86400 * 1000),
+      });
+
+      const res = await server.inject({
+        method: 'DELETE',
+        url: `/api/v1/districts/${testDistrictId}/groups/${groupId}`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().success).toBe(true);
+
+      // The group mapping row is still hard-deleted.
+      const [deleted] = await db
+        .select()
+        .from(districtTelegramGroups)
+        .where(eq(districtTelegramGroups.id, groupId));
+      expect(deleted).toBeUndefined();
+
+      // The orphaned topic of the deleted mahalla is archived, not left ACTIVE.
+      const [archivedTopic] = await db
+        .select()
+        .from(topics)
+        .where(eq(topics.id, sentinelTopicId));
+      expect(archivedTopic).toBeDefined();
+      expect(archivedTopic!.status).toBe('ARCHIVED');
+
+      // Positive control: the archive is scoped to the deleted mahalla and does not
+      // blanket-archive the district, so the other mahalla stays ACTIVE.
+      const [controlTopic] = await db
+        .select()
+        .from(topics)
+        .where(eq(topics.id, controlTopicId));
+      expect(controlTopic).toBeDefined();
+      expect(controlTopic!.status).toBe('ACTIVE');
+    } finally {
+      await db.delete(topics).where(eq(topics.id, sentinelTopicId));
+      await db.delete(topics).where(eq(topics.id, controlTopicId));
+      await db.delete(districtTelegramGroups).where(eq(districtTelegramGroups.id, groupId));
+      await db.delete(districtTelegramGroups).where(eq(districtTelegramGroups.id, controlGroupId));
+    }
   });
 });

@@ -6,6 +6,7 @@ import {
   districtTelegramBots,
   districtTelegramGroups,
   districtTelegramUserbotSessions,
+  topics,
   DistrictTelegramGroup,
   GroupTransport,
 } from '../../adapters/db/schema/index.js';
@@ -638,6 +639,22 @@ export async function deleteDistrictTelegramGroup(
       ipAddress: clientInfo?.ipAddress || null,
       userAgent: clientInfo?.userAgent || null,
     });
+
+    // Archive the now-orphaned ACTIVE topics for this mahalla (non-destructive).
+    // The group row is the only remaining anchor for the mahalla name, so its
+    // removal must not leave topics ACTIVE forever. Case-insensitive matching
+    // mirrors district_telegram_groups_district_mahalla_lower_idx, guaranteeing
+    // no live sibling group can be orphaned by this update.
+    await tx
+      .update(topics)
+      .set({ status: 'ARCHIVED' })
+      .where(
+        and(
+          eq(topics.districtId, deleted.districtId),
+          sql`LOWER(${topics.mahallaName}) = LOWER(${deleted.mahallaName})`,
+          eq(topics.status, 'ACTIVE'),
+        ),
+      );
   });
 
   return { success: true, deletedGroupId: groupId };

@@ -159,8 +159,9 @@ interface HokimLaneQueryParams {
 // --- Authoritative District Mahallas Extraction ---
 
 /**
- * Retrieves distinct Mahalla names across active district telegram groups and active topics,
- * sorted deterministically according to Uzbek Cyrillic collation.
+ * Retrieves distinct Mahalla names from live (non-FAILED) district telegram groups only;
+ * mahallas whose telegram group was deleted are no longer included.
+ * Sorted deterministically according to Uzbek Cyrillic collation.
  */
 export async function queryDistrictMahallas(db: DbClient, districtId: string): Promise<string[]> {
   if (!districtId || typeof districtId !== 'string' || districtId.trim() === '') {
@@ -168,19 +169,12 @@ export async function queryDistrictMahallas(db: DbClient, districtId: string): P
   }
 
   const result = await db.execute<{ mahalla_name: string }>(sql`
-    SELECT DISTINCT mahalla_name FROM (
-      SELECT mahalla_name 
-      FROM district_telegram_groups 
-      WHERE district_id = ${districtId} 
-        AND status != 'FAILED'
-      UNION
-      SELECT mahalla_name 
-      FROM topics 
-      WHERE district_id = ${districtId} 
-        AND status = 'ACTIVE'
-        AND retention_expires_at > NOW()
-    ) combined
-    WHERE mahalla_name IS NOT NULL AND TRIM(mahalla_name) != '';
+    SELECT DISTINCT mahalla_name
+    FROM district_telegram_groups
+    WHERE district_id = ${districtId}
+      AND status != 'FAILED'
+      AND mahalla_name IS NOT NULL
+      AND TRIM(mahalla_name) != '';
   `);
 
   const mahallas = result.rows
@@ -790,13 +784,12 @@ export async function queryHokimStatistics(
       GROUP BY mahalla_name
     ),
     district_mahallas_total AS (
+      -- Live mahallas only: derived solely from non-FAILED district_telegram_groups,
+      -- matching the mahalla dropdown contract (retained rows do not revive a hard-deleted group).
       SELECT COUNT(DISTINCT mahalla_name)::int as total_mahallas_count
-      FROM (
-        SELECT mahalla_name FROM district_telegram_groups WHERE district_id = ${districtId} AND status != 'FAILED'
-        UNION
-        SELECT mahalla_name FROM topics WHERE district_id = ${districtId} AND status = 'ACTIVE' AND retention_expires_at > NOW()
-      ) d_mahallas
-      WHERE mahalla_name IS NOT NULL AND TRIM(mahalla_name) != ''
+      FROM district_telegram_groups
+      WHERE district_id = ${districtId} AND status != 'FAILED'
+        AND mahalla_name IS NOT NULL AND TRIM(mahalla_name) != ''
     )
     SELECT 
       COUNT(DISTINCT ft.id)::int as total_unique_topics,

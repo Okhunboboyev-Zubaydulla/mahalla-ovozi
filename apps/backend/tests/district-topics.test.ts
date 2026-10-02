@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { FastifyInstance } from 'fastify';
 import pg from 'pg';
+import { eq } from 'drizzle-orm';
 import {
   DistrictTopicsPageResponse,
   TopicEvidenceResponse,
@@ -502,6 +503,47 @@ describe('Story 4.5: Browse Retained District Topics and Evidence Integration Te
       expect(Array.isArray(json.mahallas)).toBe(true);
       expect(json.mahallas).toContain('Аҳмад Дониш');
       expect(json.mahallas).not.toContain('Олтинтепа'); // Belongs to District B
+    });
+
+    it('excludes a mahalla that has an active topic but no live telegram group', async () => {
+      const sentinelMahalla = 'СИНОВ МАҲАЛЛАСИ';
+
+      // Seed a retained Topic row for District A whose mahalla has NO live telegram group.
+      // retentionExpiresAt is far in the future, so the row is unambiguously inside the
+      // retention window and would be surfaced by any name derivation that reads topics.
+      const retainedTopicId = `top_tr_ghost_${Date.now()}`;
+
+      try {
+        await db.insert(topics).values({
+          id: retainedTopicId,
+          districtId: districtAId,
+          mahallaName: sentinelMahalla,
+          calendarDay: testCalendarDay,
+          primaryLane: 'WATER',
+          status: 'ACTIVE',
+          latestRelevantEvidenceTimestamp: new Date(),
+          retentionExpiresAt: new Date(Date.now() + 90 * 86400 * 1000),
+        });
+
+        const res = await server.inject({
+          method: 'GET',
+          url: `/api/v1/districts/${districtAId}/topics/mahallas`,
+          headers: { cookie: poCookie, ...SAME_ORIGIN_HEADERS },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const json = JSON.parse(res.payload);
+        expect(Array.isArray(json.mahallas)).toBe(true);
+
+        // Positive control: the live District A group mahalla is still listed, so the
+        // exclusion assertion below cannot pass vacuously against an empty list.
+        expect(json.mahallas).toContain('Аҳмад Дониш');
+
+        // Retained topics must never resurrect a mahalla whose telegram group is gone.
+        expect(json.mahallas).not.toContain(sentinelMahalla);
+      } finally {
+        await db.delete(topics).where(eq(topics.id, retainedTopicId));
+      }
     });
   });
 

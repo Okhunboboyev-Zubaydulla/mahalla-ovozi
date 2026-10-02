@@ -10,6 +10,7 @@ export const districtQueryKeys = {
   bot: (id: string | null) => ['districts', id, 'telegram-bot'] as const,
   groups: (id: string | null) => ['districts', id, 'telegram-groups'] as const,
   hokim: (id: string | null) => ['districts', id, 'hokim-account'] as const,
+  mahallas: (id: string | null) => ['districts', id, 'mahallas'] as const,
 };
 
 export type DistrictQueryKeys = typeof districtQueryKeys;
