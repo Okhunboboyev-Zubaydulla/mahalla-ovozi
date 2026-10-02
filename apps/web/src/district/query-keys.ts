@@ -14,3 +14,14 @@ export const districtQueryKeys = {
 };
 
 export type DistrictQueryKeys = typeof districtQueryKeys;
+
+/**
+ * Query key factory for the owner-only archived mahalla administration screen.
+ * Follows the same convention as `districtQueryKeys` for caching and invalidation.
+ */
+export const archivedMahallaQueryKeys = {
+  all: ['archived-mahallas'] as const,
+  list: () => ['archived-mahallas', 'list'] as const,
+};
+
+export type ArchivedMahallaQueryKeys = typeof archivedMahallaQueryKeys;

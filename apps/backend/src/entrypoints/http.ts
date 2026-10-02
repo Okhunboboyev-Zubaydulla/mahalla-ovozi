@@ -23,6 +23,7 @@ import { registerIssueRoutes } from '../modules/issues/issue-routes.js';
 import { registerAuditRoutes } from '../modules/audit/audit-routes.js';
 import { registerDistrictTopicsRoutes } from '../modules/topics/district-topics-routes.js';
 import { registerAdminSignalsRoutes } from '../modules/topics/admin-signals-routes.js';
+import { registerArchivedMahallasRoutes } from '../modules/topics/archived-mahallas-routes.js';
 import { registerDistrictAnalysisSettingsRoutes } from '../modules/ai/district-analysis-settings-routes.js';
 import { registerSubscriptionRoutes } from '../modules/subscriptions/subscriptions-routes.js';
 import { registerUserbotSessionRoutes } from '../modules/userbot-session/userbot-session-routes.js';
@@ -72,6 +73,7 @@ export function registerAllDomainRoutes(
   registerAuditRoutes(server, ctx.db);
   registerDistrictTopicsRoutes(server, ctx.db);
   registerAdminSignalsRoutes(server, { db: ctx.db, pool: ctx.pool, boss: ctx.boss });
+  registerArchivedMahallasRoutes(server, { db: ctx.db });
   registerDistrictAnalysisSettingsRoutes(server, ctx.db);
   registerSubscriptionRoutes(server, {
     db: ctx.db,

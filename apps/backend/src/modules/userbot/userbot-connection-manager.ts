@@ -100,7 +100,6 @@ export class UserbotConnectionManager {
           logger.error({ err }, 'Failed to sync userbot sessions');
         });
       }, this.pollIntervalMs);
-      this.pollTimer.unref();
     }
 
     logger.info(

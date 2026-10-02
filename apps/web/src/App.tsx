@@ -58,6 +58,11 @@ const AuditHistoryPage = lazy(() =>
     default: m.AuditHistoryPage,
   }))
 );
+const ArchivedMahallasPage = lazy(() =>
+  import('./pages/ArchivedMahallasPage.js').then((m) => ({
+    default: m.ArchivedMahallasPage,
+  }))
+);
 const HokimDashboardPage = lazy(() =>
   import('./pages/HokimDashboardPage.js').then((m) => ({
     default: m.HokimDashboardPage,
@@ -154,6 +159,7 @@ export function App() {
                           <Route path="hokim-accounts" element={<HokimAccountsPage />} />
                           <Route path="ai-operations" element={<AiOperationsPage />} />
                           <Route path="audit-history" element={<AuditHistoryPage />} />
+                          <Route path="archived-mahallas" element={<ArchivedMahallasPage />} />
                         </Route>
 
                         <Route path="*" element={<Navigate to="/" replace />} />

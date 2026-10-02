@@ -3,14 +3,16 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { DbClient } from '../../adapters/db/client.js';
 import * as schema from '../../adapters/db/schema/index.js';
 import { topics } from '../../adapters/db/schema/topics.js';
-import { acceptedEvidence } from '../../adapters/db/schema/accepted-evidence.js';
-import { topicProjections } from '../../adapters/db/schema/topic-projections.js';
+import { deleteTopicCascadeAtomic } from './topic-cascade-deletion.js';
 
 export type DrizzleDatabase = DbClient | NodePgDatabase<typeof schema>;
 
 export interface TopicPurgeExecutionResult {
   evidenceCount: number;
   projectionsCount: number;
+  aiOperationsCount: number;
+  intakeRecordsCount: number;
+  jobRecordsCount: number;
   purged: boolean;
   reason: 'SUCCESS' | 'EXTENDED_BY_NEWER_EVIDENCE' | 'TOPIC_NOT_FOUND';
 }
@@ -41,6 +43,9 @@ export async function findExpiredTopicIds(
     .where(
       and(
         eq(topics.districtId, cleanDistrictId),
+        // ARCHIVED topics are intentionally excluded from the automatic purge: they are
+        // preserved deliberately so an administrator can review them, and removal is an
+        // explicit administrative action rather than a retention side effect.
         eq(topics.status, 'ACTIVE'),
         lte(topics.retentionExpiresAt, now),
       ),
@@ -55,8 +60,9 @@ export async function findExpiredTopicIds(
  * Executes atomic, referentially safe purge of an expired Topic and all its associated
  * Accepted Evidence and Topic Projections within a single PostgreSQL transaction block.
  *
- * Enforces strict topological deletion order to satisfy onDelete: 'restrict' constraints:
- *   topic_projections -> accepted_evidence -> topics
+ * The complete per-topic cascade (projections, evidence, ai_operations, telegram intake
+ * records, pgboss jobs, then the topic row) lives in deleteTopicCascadeAtomic so the
+ * retention purge and the administrative ARCHIVED-topic delete share one implementation.
  *
  * Governed by FR-12, AD-3, AD-4, AD-6, AD-7, AD-9.
  */
@@ -73,6 +79,9 @@ export async function deleteTopicWithEvidenceAtomic(
     return {
       evidenceCount: 0,
       projectionsCount: 0,
+      aiOperationsCount: 0,
+      intakeRecordsCount: 0,
+      jobRecordsCount: 0,
       purged: false,
       reason: 'TOPIC_NOT_FOUND',
     };
@@ -90,6 +99,9 @@ export async function deleteTopicWithEvidenceAtomic(
     return {
       evidenceCount: 0,
       projectionsCount: 0,
+      aiOperationsCount: 0,
+      intakeRecordsCount: 0,
+      jobRecordsCount: 0,
       purged: false,
       reason: 'TOPIC_NOT_FOUND',
     };
@@ -100,41 +112,24 @@ export async function deleteTopicWithEvidenceAtomic(
     return {
       evidenceCount: 0,
       projectionsCount: 0,
+      aiOperationsCount: 0,
+      intakeRecordsCount: 0,
+      jobRecordsCount: 0,
       purged: false,
       reason: 'EXTENDED_BY_NEWER_EVIDENCE',
     };
   }
 
-  // 3. Step 1 of topological deletion: remove topic_projections (satisfies anchorEvidenceId FK restrict)
-  const deletedProjections = await tx
-    .delete(topicProjections)
-    .where(
-      and(
-        eq(topicProjections.topicId, topicId),
-        eq(topicProjections.districtId, districtId),
-      ),
-    )
-    .returning({ id: topicProjections.id });
-
-  // 4. Step 2 of topological deletion: remove accepted_evidence (satisfies topicId FK restrict)
-  const deletedEvidence = await tx
-    .delete(acceptedEvidence)
-    .where(
-      and(
-        eq(acceptedEvidence.topicId, topicId),
-        eq(acceptedEvidence.districtId, districtId),
-      ),
-    )
-    .returning({ id: acceptedEvidence.id });
-
-  // 5. Step 3 of topological deletion: remove the topic itself
-  await tx
-    .delete(topics)
-    .where(and(eq(topics.id, topicId), eq(topics.districtId, districtId)));
+  // 3. Execute the complete shared cascade: topic_projections -> accepted_evidence ->
+  //    ai_operations -> telegram_intake_records -> pgboss.job -> topics.
+  const cascade = await deleteTopicCascadeAtomic(tx, cleanDistrictId, cleanTopicId);
 
   return {
-    evidenceCount: deletedEvidence.length,
-    projectionsCount: deletedProjections.length,
+    evidenceCount: cascade.evidenceCount,
+    projectionsCount: cascade.projectionsCount,
+    aiOperationsCount: cascade.aiOperationsCount,
+    intakeRecordsCount: cascade.intakeRecordsCount,
+    jobRecordsCount: cascade.jobRecordsCount,
     purged: true,
     reason: 'SUCCESS',
   };

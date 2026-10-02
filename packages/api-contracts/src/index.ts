@@ -13,5 +13,6 @@ export * from './audit.js';
 export * from './analysis-settings.js';
 export * from './subscriptions.js';
 export * from './signals.js';
+export * from './archived-mahallas.js';
 export * from './timezone.js';
 export * from './userbot-session.js';

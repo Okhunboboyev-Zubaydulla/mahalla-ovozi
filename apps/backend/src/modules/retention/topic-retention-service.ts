@@ -94,6 +94,9 @@ export async function purgeExpiredTopic(
       districtId,
       evidenceCount: result.evidenceCount,
       projectionsCount: result.projectionsCount,
+      aiOperationsPurged: result.aiOperationsCount,
+      intakeRecordsPurged: result.intakeRecordsCount,
+      jobsPurged: result.jobRecordsCount,
       purged: result.purged,
       reason: result.reason,
     };

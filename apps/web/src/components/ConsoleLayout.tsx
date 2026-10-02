@@ -20,6 +20,7 @@ import {
   RobotOutlined,
   HistoryOutlined,
   LogoutOutlined,
+  InboxOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/auth-context.js';
@@ -71,6 +72,11 @@ const MENU_ITEMS = [
     key: '/audit-history',
     icon: <HistoryOutlined />,
     label: 'Аудит тарихи',
+  },
+  {
+    key: '/archived-mahallas',
+    icon: <InboxOutlined />,
+    label: 'Архивланган маҳаллалар',
   },
 ];
 

@@ -8,6 +8,9 @@ export interface RetentionPurgeResult {
   districtId: string;
   evidenceCount: number;
   projectionsCount: number;
+  aiOperationsPurged?: number;
+  intakeRecordsPurged?: number;
+  jobsPurged?: number;
   purged: boolean;
   reason?: 'SUCCESS' | 'EXTENDED_BY_NEWER_EVIDENCE' | 'TOPIC_NOT_FOUND' | 'LOCKED_OR_ERROR';
 }
