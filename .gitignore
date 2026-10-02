@@ -42,3 +42,6 @@ blob-report/
 dsh-session-*/
 tombstones.json
 **/tombstones.json
+
+# Local scratch (issue drafts, working notes)
+.scratch/
