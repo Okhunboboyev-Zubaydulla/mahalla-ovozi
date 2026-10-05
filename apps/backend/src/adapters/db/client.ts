@@ -203,4 +203,85 @@ export function mapPostgresConstraintError(
   }
 }
 
+/**
+ * Maximum depth bound for recursive error cause-chain unwrapping.
+ * Guards against unbounded loops and stack overflows.
+ */
+export const MAX_ERROR_CAUSE_DEPTH = 8;
+
+export interface PostgresUniqueViolation {
+  code: '23505';
+  constraint: string | null;
+  detail?: string | null;
+  table?: string | null;
+  schema?: string | null;
+  message?: string | null;
+}
+
+/**
+ * Walks an error's cause chain up to MAX_ERROR_CAUSE_DEPTH and returns the driver error
+ * that carries SQLSTATE 23505 (unique_violation), or null when no level does.
+ *
+ * Both SQLSTATE 23505 and the constraint name are extracted from the EXACT same error layer.
+ * If constraintName is specified, it returns the violation only if candidate.constraint
+ * matches exactly or contains the constraintName substring. If candidate.constraint is null
+ * or does not match, null is returned.
+ *
+ * Protected with a Set-based cycle guard and depth limit to prevent infinite loops.
+ */
+export function findUniqueViolation(
+  err: unknown,
+  constraintName?: string,
+): PostgresUniqueViolation | null {
+  if (err === null || typeof err !== 'object') {
+    return null;
+  }
+
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+
+  for (let depth = 0; depth < MAX_ERROR_CAUSE_DEPTH; depth += 1) {
+    if (current === null || typeof current !== 'object' || seen.has(current)) {
+      return null;
+    }
+    seen.add(current);
+
+    const candidate = current as Record<string, unknown>;
+    if (candidate.code === '23505') {
+      const constraint = typeof candidate.constraint === 'string' ? candidate.constraint : null;
+
+      if (constraintName !== undefined) {
+        if (!constraint || (constraint !== constraintName && !constraint.includes(constraintName))) {
+          return null;
+        }
+      }
+
+      return {
+        code: '23505',
+        constraint,
+        detail: typeof candidate.detail === 'string' ? candidate.detail : null,
+        table: typeof candidate.table === 'string' ? candidate.table : null,
+        schema: typeof candidate.schema === 'string' ? candidate.schema : null,
+        message: typeof candidate.message === 'string' ? candidate.message : null,
+      };
+    }
+
+    const cause = 'cause' in candidate ? candidate.cause : undefined;
+    if (cause === undefined || cause === null) {
+      return null;
+    }
+    current = cause;
+  }
+
+  return null;
+}
+
+/**
+ * Predicate returning true if the error chain contains a PostgreSQL unique violation (23505),
+ * optionally matching the specified constraint name.
+ */
+export function isUniqueViolation(err: unknown, constraintName?: string): boolean {
+  return findUniqueViolation(err, constraintName) !== null;
+}
+
 

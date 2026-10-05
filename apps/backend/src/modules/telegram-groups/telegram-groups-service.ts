@@ -248,6 +248,7 @@ export async function createDistrictTelegramGroup(
       encryptedToken: botRow.encryptedToken,
       tokenIv: botRow.tokenIv,
       tokenTag: botRow.tokenTag,
+      tokenKeyVersion: botRow.tokenKeyVersion,
     });
 
     const validated = await validateGroupChatWithTelegram(
@@ -443,6 +444,7 @@ export async function updateDistrictTelegramGroup(
         encryptedToken: botRow.encryptedToken,
         tokenIv: botRow.tokenIv,
         tokenTag: botRow.tokenTag,
+        tokenKeyVersion: botRow.tokenKeyVersion,
       });
 
       const validated = await validateGroupChatWithTelegram(token, newChatId, botRow.botId);

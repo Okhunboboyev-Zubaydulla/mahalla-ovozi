@@ -40,6 +40,7 @@ import { registerRetentionJobHandler } from '../modules/retention/jobs/retention
 import { registerSubscriptionExpiryJobHandler } from '../modules/subscriptions/jobs/subscription-expiry-job-handler.js';
 import { registerDistrictDeletionJobHandler } from '../modules/subscriptions/jobs/district-deletion-job-handler.js';
 import { checkAndHealTelegramWebhooks } from '../modules/telegram-intake/telegram-watchdog.js';
+import { assertEncryptionKeyConfigured } from '../adapters/crypto/token-cipher.js';
 
 let activeBossInstance: PgBoss | null = null;
 let internalPool: pg.Pool | null = null;
@@ -144,6 +145,8 @@ export async function registerWorkerPipelines(
 }
 
 export async function startWorker(options?: StartWorkerOptions): Promise<PgBoss> {
+  assertEncryptionKeyConfigured();
+
   const boss = options?.boss || createBossClient();
   activeBossInstance = boss;
 

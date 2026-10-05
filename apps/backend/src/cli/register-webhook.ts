@@ -12,7 +12,7 @@ export async function run() {
 
   try {
     const res = await pool.query(
-      'SELECT bot_id, encrypted_token, token_iv, token_tag FROM district_telegram_bots WHERE bot_id = $1',
+      'SELECT bot_id, encrypted_token, token_iv, token_tag, token_key_version FROM district_telegram_bots WHERE bot_id = $1',
       ['8293431272'],
     );
     const row = res.rows[0];
@@ -25,6 +25,7 @@ export async function run() {
       encryptedToken: row.encrypted_token,
       tokenIv: row.token_iv,
       tokenTag: row.token_tag,
+      tokenKeyVersion: row.token_key_version,
     });
 
     const webhookUrl = `${ngrokUrl}/api/v1/webhooks/telegram/${row.bot_id}`;

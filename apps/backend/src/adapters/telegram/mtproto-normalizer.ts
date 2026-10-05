@@ -21,6 +21,17 @@ export interface CanonicalIngestEnvelope {
   transport: GroupTransport;
   chatId: string;
   messageId: string;
+  /**
+   * The update identifier the source transport supplies, or null when it supplies none.
+   * The bot path populates this from the incoming update; MTProto message updates carry no
+   * per-message update identifier, so null is the honest value for this transport.
+   */
+  updateId: string | null;
+  /**
+   * Whether this update is an edit, classified structurally at the point where the structural
+   * information exists. Intake reads this field instead of re-deriving it from the payload.
+   */
+  isEdit: boolean;
   originalTimestamp: Date;
   calendarDay: string; // Tashkent YYYY-MM-DD
   normalizedMessage: TelegramIncomingMessage; // Bot-API-compatible
@@ -68,6 +79,31 @@ function getTypeName(obj: unknown): string | undefined {
     return record.className;
   }
   return undefined;
+}
+
+/**
+ * Structural edit classification. This is authoritative because it reads the update's own
+ * variant, which is the only place the question can be answered without guessing.
+ */
+function classifyStructuralEdit(rootType: string | undefined): boolean {
+  return (
+    rootType === 'UpdateEditMessage' ||
+    rootType === 'UpdateEditChannelMessage' ||
+    rootType === 'updateEditMessage' ||
+    rootType === 'updateEditChannelMessage'
+  );
+}
+
+/**
+ * The update identifier the library supplies for this update, or null when it supplies none.
+ * MTProto message updates carry no per-message update identifier, so null is the honest value.
+ */
+function extractUpdateId(payload: Record<string, unknown>): string | null {
+  const rawUpdateId = payload.update_id ?? payload.updateId;
+  if (rawUpdateId === undefined || rawUpdateId === null) {
+    return null;
+  }
+  return String(rawUpdateId);
 }
 
 function cleanIdString(id: unknown): string {
@@ -342,6 +378,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
 
   const payload = update as Record<string, unknown>;
   const rootType = getTypeName(payload);
+  const isEdit = classifyStructuralEdit(rootType);
 
   // 1. Explicit non-message updates
   if (
@@ -850,6 +887,8 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     transport: 'USERBOT',
     chatId: chatInfo.chatIdStr,
     messageId: messageIdStr,
+    updateId: extractUpdateId(payload),
+    isEdit,
     originalTimestamp,
     calendarDay,
     normalizedMessage,

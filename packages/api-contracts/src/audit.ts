@@ -140,6 +140,8 @@ export const ALLOWED_METADATA_SEARCH_KEYS = [
   'staleJobsPurged',
   'tombstonesSynchronized',
   'durationMs',
+  'signalType',
+  'waitSeconds',
 ] as const;
 
 export const DISTRICT_LIFECYCLE_AUDIT_ACTIONS = [
@@ -154,4 +156,23 @@ export const DISTRICT_LIFECYCLE_AUDIT_ACTIONS = [
   'DISTRICT_RESTORE_RECONCILED',
   'DISTRICT_RESTORE_RECONCILIATION_FAILED',
 ] as const;
+
+export const USERBOT_SESSION_AUDIT_ACTIONS = [
+  'USERBOT_SESSION_CREATED',
+  'USERBOT_SESSION_ACTIVATED',
+  'USERBOT_SESSION_BANNED',
+  'USERBOT_SESSION_AUTH_KEY_DUPLICATED',
+  'USERBOT_SESSION_DISABLED',
+  'USERBOT_SESSION_ENABLED',
+  'USERBOT_SESSION_STATUS_UPDATED',
+] as const;
+export const UserbotSessionAuditActionSchema = z.enum(USERBOT_SESSION_AUDIT_ACTIONS);
+export type UserbotSessionAuditAction = z.infer<typeof UserbotSessionAuditActionSchema>;
+
+export const USERBOT_AUDIT_ACTIONS = [
+  ...USERBOT_SESSION_AUDIT_ACTIONS,
+  'USERBOT_ABNORMAL_SIGNAL',
+] as const;
+export const UserbotAuditActionSchema = z.enum(USERBOT_AUDIT_ACTIONS);
+export type UserbotAuditAction = z.infer<typeof UserbotAuditActionSchema>;
 

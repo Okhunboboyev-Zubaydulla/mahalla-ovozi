@@ -61,7 +61,7 @@ Rushing into multiple groups triggers `PEER_FLOOD` or immediate account suspensi
 
 ---
 
-## 4. Verification Checklist Before Switching Transport
+## 4. Verification Checklist & Interactive Authentication
 
 Before switching any group to `USERBOT` in the Mahalla Ovozi console or database:
 
@@ -70,21 +70,58 @@ Before switching any group to `USERBOT` in the Mahalla Ovozi console or database
 - [ ] Two-step verification (2FA) cloud password is enabled.
 - [ ] Account was admitted to the target group by a human (admin, resident, or invite link).
 - [ ] Account has resided in the target group for ≥ 24 hours without restriction.
-- [ ] Session has been authenticated and encrypted via the VPS CLI:
+- [ ] Session has been authenticated and encrypted via the verified production VPS CLI command:
   ```bash
-  ssh airnet-vps "cd /opt/mahalla-ovozi && docker compose run --rm backend pnpm userbot:login --district-id <DISTRICT_ID>"
+  ssh airnet-vps "cd /opt/mahalla-ovozi && docker compose -f deploy/compose/docker-compose.prod.yml run --rm userbot pnpm --filter @mahalla-ovozi/backend cli:bootstrap-userbot --district-id <DISTRICT_ID>"
   ```
-- [ ] District userbot session is verified in `ACTIVE` status:
+  > **Note on Execution Context:**
+  > - **Explicit Compose File:** Must target `deploy/compose/docker-compose.prod.yml` explicitly because multiple compose files exist across development and production environments.
+  > - **Service Container:** Must run inside the `userbot` service container (built from the `userbot-runner` Docker target) because MTProto client dependencies (`teleproto`) are intentionally stripped from `backend` and `worker` images for hexagonal isolation.
+  > - **Verified Script:** Invokes the verified script `cli:bootstrap-userbot` (defined in `@mahalla-ovozi/backend` package.json) to handle interactive phone code and 2FA cloud password authentication.
+
+- [ ] Stack health and District userbot session are verified:
   ```bash
-  # Verify status in database or console
+  # Check overall VPS container status:
   pnpm vps:status
   ```
+  > **Note on Status Checks:** `pnpm vps:status` (verified in repository root `package.json`) confirms that Docker containers (`mahalla-postgres`, `mahalla-backend`, `mahalla-worker`, `mahalla-userbot`, `mahalla-caddy`) are healthy and running. District userbot session state (`ACTIVE`) is verified via the HTTP API:
+  > ```bash
+  > GET /api/v1/districts/:districtId/userbot-session
+  > ```
+  > or through the Hokim / Product Owner management console.
 
 ---
 
-## 5. Abnormal Signal Response
+## 5. Disable & Kill-Switch Semantics (Server-Side Revocation)
 
-If the account encounters any abnormal signal:
-- `FLOOD_WAIT_X`: System honors sleep duration and retries once. Do not attempt manual actions or repeated CLI logins during this window.
-- `PEER_FLOOD` or account restrictions: Halt joining additional groups for 7 days.
-- `PHONE_NUMBER_BANNED`: Follow the disaster recovery runbook to procure a replacement SIM and re-authenticate via CLI.
+When an operator or Product Owner triggers the kill switch or disables a userbot session (`POST /api/v1/districts/:districtId/userbot-session/disable`):
+
+1. **Server-Side Session Revocation:** The system executes `client.logOut()` via MTProto to terminate the authorization session directly on Telegram's servers. This ensures the auth key cannot be reused or hijacked.
+2. **Secret Envelope Erasure:** All cipher material in PostgreSQL (`session_encrypted`, `api_hash_encrypted`, `session_iv`, `session_tag`) is permanently wiped (`NULL`). Key version is preserved for audit trail integrity.
+3. **Status Transition to `DISABLED`:** The session row transitions to `DISABLED`, and ingestion immediately halts.
+4. **Re-Enabling Requires Re-Authentication (`PENDING`):**
+   - Re-enabling a previously disabled session (`POST /api/v1/districts/:districtId/userbot-session/enable`) transitions status to `PENDING`, **not** `ACTIVE`.
+   - Because credentials and auth keys were completely destroyed during revocation, the session cannot silently resume. The operator must execute the interactive CLI bootstrap command again with phone code and 2FA password to generate a fresh session.
+
+---
+
+## 6. Abnormal Signal Response & Ban Recovery
+
+If the userbot encounters abnormal MTProto signals during operation:
+
+- **`FLOOD_WAIT_X`:**
+  - The runtime honors Telegram's sleep duration and retries once automatically.
+  - **Second Consecutive Wait Halt:** If a **second consecutive wait** is encountered on retry, automatic retries are immediately halted to prevent hammering Telegram's servers and escalating anti-spam scrutiny.
+  - **Operational Issue Alert:** The system raises a District-scoped Operational Issue (`Warning` / `Degraded`) for operator investigation. Do not attempt manual actions or repeated CLI logins during this backoff window.
+
+- **`PEER_FLOOD` or Account Restrictions:**
+  - Telegram anti-spam flags excessive joining or interactions. Halt joining additional groups for at least 7 days.
+
+- **`PHONE_NUMBER_BANNED`:**
+  - **Platform Reality:** When Telegram bans an account, the platform rejects all subsequent authentication attempts. Technical recovery cannot re-authenticate or revive a banned phone number, and bootstrap attempts against `BANNED` sessions are refused by the system.
+  - **Recovery Protocol:**
+    1. Procure a brand new physical SIM card from a local carrier (aged ≥30 days per Section 1).
+    2. Configure profile and 2FA cloud password on a physical mobile device (Section 2).
+    3. Register a new District session row via the console or API.
+    4. Complete interactive authentication with the new phone number using the CLI bootstrap command.
+

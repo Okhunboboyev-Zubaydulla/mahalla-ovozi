@@ -636,6 +636,25 @@ async function checkProcessingDelay(
   calendarDay: string,
 ): Promise<boolean> {
   try {
+    const degradedTransportIssue = await db.execute(sql`
+      SELECT 1 FROM operational_issues
+      WHERE district_id = ${districtId}
+        AND status = 'ACTIVE'
+        AND (
+          (component = 'USERBOT' AND (health_status = 'Degraded' OR health_status = 'Unavailable'))
+          OR issue_category = 'UNRECOVERABLE_GAP'
+          OR issue_category IN ('USERBOT_BANNED', 'USERBOT_SESSION_BANNED', 'USERBOT_STALE', 'STALE_INACTIVITY')
+        )
+      LIMIT 1;
+    `);
+    if (degradedTransportIssue.rows && degradedTransportIssue.rows.length > 0) {
+      return true;
+    }
+  } catch {
+    // operational_issues table might not exist in certain test setups or schemas
+  }
+
+  try {
     const bossDelay = await db.execute(sql`
       SELECT 1 FROM pgboss.job
       WHERE name IN (

@@ -85,98 +85,111 @@ export type ProcessWebhookResult =
       messageId: string;
     };
 
+export type TransportAuthorizationTarget =
+  | { transport: 'BOT_API'; botId: string; chatId: string }
+  | { transport: 'USERBOT'; districtId: string; chatId: string };
+
 /**
  * Authoritatively resolves the District identity and Mahalla mapping from server-side database
- * records based on the incoming botId and chatId. Client-supplied IDs are never trusted.
+ * records based on the transport target (BOT_API with botId or USERBOT with districtId) and chatId.
+ * Client-supplied IDs are never trusted.
+ *
+ * Evaluates the 6 authorization checks in strict order:
+ * 1. Credential check:
+ *    - BOT_API: query districtTelegramBots by botId. If not found -> BOT_NOT_FOUND. If status != 'VALID' -> BOT_NOT_VALID.
+ *    - USERBOT: query districtTelegramUserbotSessions by districtId. If not found or status != 'ACTIVE' -> USERBOT_SESSION_NOT_ACTIVE.
+ * 2. District status and eligibility:
+ *    - Query districts by resolvedDistrictId. If status not in ['ACTIVE', 'GRACE'] or accessEligible === false -> DISTRICT_NOT_ACTIVE.
+ * 3. Group mapping existence:
+ *    - Query districtTelegramGroups by chatId. If not found or mahallaName missing -> GROUP_NOT_APPROVED.
+ * 4. Cross-district mismatch:
+ *    - If group.districtId !== resolvedDistrictId -> CROSS_DISTRICT_MISMATCH.
+ * 5. Group approval status:
+ *    - If group.status !== 'VALID' -> GROUP_NOT_APPROVED.
+ * 6. Transport mutual exclusivity:
+ *    - If group.transport !== target.transport -> TRANSPORT_MISMATCH.
  */
-export async function resolveDistrictBotAndGroup(
+export async function resolveDistrictTransportAuthorization(
   db: DbClient,
-  botId: string,
-  chatId: string,
+  target: TransportAuthorizationTarget,
 ): Promise<AuthorizationResult> {
-  // Consolidated 1-round-trip relational query (H-1 performance optimization)
-  const [record] = await db
-    .select({
-      botId: districtTelegramBots.botId,
-      botDistrictId: districtTelegramBots.districtId,
-      botStatus: districtTelegramBots.status,
-      districtId: districts.id,
-      districtStatus: districts.status,
-      districtAccessEligible: districts.accessEligible,
-      groupId: districtTelegramGroups.id,
-      groupDistrictId: districtTelegramGroups.districtId,
-      groupStatus: districtTelegramGroups.status,
-      groupTransport: districtTelegramGroups.transport,
-      mahallaName: districtTelegramGroups.mahallaName,
-    })
-    .from(districtTelegramBots)
-    .leftJoin(districts, eq(districts.id, districtTelegramBots.districtId))
-    .leftJoin(
-      districtTelegramGroups,
-      eq(districtTelegramGroups.telegramChatId, chatId),
-    )
-    .where(eq(districtTelegramBots.botId, botId))
-    .limit(1);
+  if (target.transport === 'BOT_API') {
+    // Consolidated 1-round-trip relational query (H-1 performance optimization)
+    const [record] = await db
+      .select({
+        botId: districtTelegramBots.botId,
+        botDistrictId: districtTelegramBots.districtId,
+        botStatus: districtTelegramBots.status,
+        districtId: districts.id,
+        districtStatus: districts.status,
+        districtAccessEligible: districts.accessEligible,
+        groupId: districtTelegramGroups.id,
+        groupDistrictId: districtTelegramGroups.districtId,
+        groupStatus: districtTelegramGroups.status,
+        groupTransport: districtTelegramGroups.transport,
+        mahallaName: districtTelegramGroups.mahallaName,
+      })
+      .from(districtTelegramBots)
+      .leftJoin(districts, eq(districts.id, districtTelegramBots.districtId))
+      .leftJoin(
+        districtTelegramGroups,
+        eq(districtTelegramGroups.telegramChatId, target.chatId),
+      )
+      .where(eq(districtTelegramBots.botId, target.botId))
+      .limit(1);
 
-  // 1. Look up bot by public botId
-  if (!record) {
-    return { authorized: false, reason: 'BOT_NOT_FOUND' };
+    // 1. Look up bot by public botId
+    if (!record) {
+      return { authorized: false, reason: 'BOT_NOT_FOUND' };
+    }
+
+    // 1.1 Verify bot is in VALID status
+    if (record.botStatus !== 'VALID') {
+      return { authorized: false, reason: 'BOT_NOT_VALID' };
+    }
+
+    const resolvedDistrictId = record.botDistrictId;
+
+    // 2. Authoritatively verify associated District is in ACTIVE or GRACE status
+    if (
+      !record.districtId ||
+      (record.districtStatus !== 'ACTIVE' && record.districtStatus !== 'GRACE') ||
+      record.districtAccessEligible === false
+    ) {
+      return { authorized: false, reason: 'DISTRICT_NOT_ACTIVE' };
+    }
+
+    // 3. Look up source group mapping by telegramChatId
+    if (!record.groupId || !record.mahallaName) {
+      return { authorized: false, reason: 'GROUP_NOT_APPROVED' };
+    }
+
+    // 4. Verify group belongs to the exact same District as the bot
+    if (record.groupDistrictId !== resolvedDistrictId) {
+      return { authorized: false, reason: 'CROSS_DISTRICT_MISMATCH' };
+    }
+
+    // 5. Verify group is in VALID approved status
+    if (record.groupStatus !== 'VALID') {
+      return { authorized: false, reason: 'GROUP_NOT_APPROVED' };
+    }
+
+    // 6. Verify group transport matches BOT_API (mutual exclusivity: USERBOT group cannot be ingested via BOT_API)
+    if (record.groupTransport && record.groupTransport !== 'BOT_API') {
+      return { authorized: false, reason: 'TRANSPORT_MISMATCH' };
+    }
+
+    return {
+      authorized: true,
+      districtId: resolvedDistrictId,
+      mahallaName: record.mahallaName,
+      botId: target.botId,
+      groupId: record.groupId,
+      transport: 'BOT_API',
+    };
   }
 
-  // 1.1 Verify bot is in VALID status
-  if (record.botStatus !== 'VALID') {
-    return { authorized: false, reason: 'BOT_NOT_VALID' };
-  }
-
-  // 2. Authoritatively verify associated District is in ACTIVE status
-  if (
-    !record.districtId ||
-    (record.districtStatus !== 'ACTIVE' && record.districtStatus !== 'GRACE') ||
-    record.districtAccessEligible === false
-  ) {
-    return { authorized: false, reason: 'DISTRICT_NOT_ACTIVE' };
-  }
-
-  // 3. Look up source group mapping by telegramChatId
-  if (!record.groupId || !record.mahallaName) {
-    return { authorized: false, reason: 'GROUP_NOT_APPROVED' };
-  }
-
-  // 4. Verify group belongs to the exact same District as the bot
-  if (record.groupDistrictId !== record.botDistrictId) {
-    return { authorized: false, reason: 'CROSS_DISTRICT_MISMATCH' };
-  }
-
-  // 5. Verify group is in VALID approved status
-  if (record.groupStatus !== 'VALID') {
-    return { authorized: false, reason: 'GROUP_NOT_APPROVED' };
-  }
-
-  // 6. Verify group transport matches BOT_API (mutual exclusivity: USERBOT group cannot be ingested via BOT_API)
-  if (record.groupTransport && record.groupTransport !== 'BOT_API') {
-    return { authorized: false, reason: 'TRANSPORT_MISMATCH' };
-  }
-
-  return {
-    authorized: true,
-    districtId: record.districtId,
-    mahallaName: record.mahallaName,
-    botId: record.botId,
-    groupId: record.groupId,
-    transport: 'BOT_API',
-  };
-}
-
-/**
- * Authoritatively resolves the District identity and Mahalla mapping for a USERBOT message
- * based on the incoming districtId and chatId. Client-supplied IDs are never trusted.
- * Authorizes on: (District session ACTIVE) + (group mapped to District, VALID) + (District ACTIVE/GRACE) + (group transport USERBOT), with no botId.
- */
-export async function resolveDistrictUserbotAndGroup(
-  db: DbClient,
-  districtId: string,
-  chatId: string,
-): Promise<AuthorizationResult> {
+  // USERBOT transport
   const [record] = await db
     .select({
       districtId: districts.id,
@@ -197,23 +210,23 @@ export async function resolveDistrictUserbotAndGroup(
     )
     .leftJoin(
       districtTelegramGroups,
-      eq(districtTelegramGroups.telegramChatId, chatId),
+      eq(districtTelegramGroups.telegramChatId, target.chatId),
     )
-    .where(eq(districts.id, districtId))
+    .where(eq(districts.id, target.districtId))
     .limit(1);
 
-  // 1. Authoritatively verify associated District exists and is in ACTIVE or GRACE status
+  // 1. Verify District has an active userbot session
+  if (!record?.sessionId || record.sessionStatus !== 'ACTIVE') {
+    return { authorized: false, reason: 'USERBOT_SESSION_NOT_ACTIVE' };
+  }
+
+  // 2. Authoritatively verify associated District exists and is in ACTIVE or GRACE status
   if (
-    !record ||
+    !record.districtId ||
     (record.districtStatus !== 'ACTIVE' && record.districtStatus !== 'GRACE') ||
     record.districtAccessEligible === false
   ) {
     return { authorized: false, reason: 'DISTRICT_NOT_ACTIVE' };
-  }
-
-  // 2. Verify District has an active userbot session
-  if (!record.sessionId || record.sessionStatus !== 'ACTIVE') {
-    return { authorized: false, reason: 'USERBOT_SESSION_NOT_ACTIVE' };
   }
 
   // 3. Look up source group mapping by telegramChatId
@@ -222,7 +235,7 @@ export async function resolveDistrictUserbotAndGroup(
   }
 
   // 4. Verify group belongs to this district (rejects cross-district chat)
-  if (record.groupDistrictId !== record.districtId) {
+  if (record.groupDistrictId !== target.districtId) {
     return { authorized: false, reason: 'CROSS_DISTRICT_MISMATCH' };
   }
 
@@ -244,6 +257,41 @@ export async function resolveDistrictUserbotAndGroup(
     groupId: record.groupId,
     transport: 'USERBOT',
   };
+}
+
+/**
+ * Authoritatively resolves the District identity and Mahalla mapping from server-side database
+ * records based on the incoming botId and chatId. Client-supplied IDs are never trusted.
+ * Thin delegator to resolveDistrictTransportAuthorization.
+ */
+export async function resolveDistrictBotAndGroup(
+  db: DbClient,
+  botId: string,
+  chatId: string,
+): Promise<AuthorizationResult> {
+  return resolveDistrictTransportAuthorization(db, {
+    transport: 'BOT_API',
+    botId,
+    chatId,
+  });
+}
+
+/**
+ * Authoritatively resolves the District identity and Mahalla mapping for a USERBOT message
+ * based on the incoming districtId and chatId. Client-supplied IDs are never trusted.
+ * Authorizes on: (District session ACTIVE) + (group mapped to District, VALID) + (District ACTIVE/GRACE) + (group transport USERBOT), with no botId.
+ * Thin delegator to resolveDistrictTransportAuthorization.
+ */
+export async function resolveDistrictUserbotAndGroup(
+  db: DbClient,
+  districtId: string,
+  chatId: string,
+): Promise<AuthorizationResult> {
+  return resolveDistrictTransportAuthorization(db, {
+    transport: 'USERBOT',
+    districtId,
+    chatId,
+  });
 }
 
 /**
@@ -292,7 +340,11 @@ export async function processTelegramWebhookUpdate(
     rawMsg.from?.id != null ? String(rawMsg.from.id) : null;
 
   const db = createDbClient(pool);
-  const auth = await resolveDistrictBotAndGroup(db, botId, chatId);
+  const auth = await resolveDistrictTransportAuthorization(db, {
+    transport: 'BOT_API',
+    botId,
+    chatId,
+  });
 
   if (!auth.authorized) {
     return {
@@ -339,7 +391,11 @@ export async function processUserbotIngestEnvelope(
   envelope: CanonicalIngestEnvelope,
 ): Promise<ProcessWebhookResult> {
   const db = createDbClient(pool);
-  const auth = await resolveDistrictUserbotAndGroup(db, districtId, envelope.chatId);
+  const auth = await resolveDistrictTransportAuthorization(db, {
+    transport: 'USERBOT',
+    districtId,
+    chatId: envelope.chatId,
+  });
 
   if (!auth.authorized) {
     return {
@@ -354,9 +410,11 @@ export async function processUserbotIngestEnvelope(
     envelope.normalizedMessage.from?.id != null
       ? String(envelope.normalizedMessage.from.id)
       : null;
-  const updateId = null;
 
-  const isEdit = isUserbotEnvelopeEdit(envelope);
+  // The canonical envelope is the single boundary between the two transports. Edit detection
+  // and the update identifier are answered by the normalizer and read here, not re-derived.
+  const updateId = envelope.updateId;
+  const isEdit = envelope.isEdit;
 
   // Bot-API compatible payload with normalized message embedded for all downstream consumers
   const rawPayload =
@@ -646,33 +704,3 @@ export async function ingestTelegramMessage(
   };
 }
 
-/**
- * Pure helper detecting whether a CanonicalIngestEnvelope represents an edited message.
- */
-function isUserbotEnvelopeEdit(envelope: CanonicalIngestEnvelope): boolean {
-  if ((envelope as { isEdit?: boolean }).isEdit === true) {
-    return true;
-  }
-  const normMsg = envelope.normalizedMessage as Record<string, unknown> | undefined;
-  if (normMsg && (normMsg.edit_date != null || normMsg.editDate != null)) {
-    return true;
-  }
-  if (envelope.rawPayload && typeof envelope.rawPayload === 'object') {
-    const raw = envelope.rawPayload as Record<string, unknown>;
-    if (
-      raw._ === 'UpdateEditChannelMessage' ||
-      raw._ === 'UpdateEditMessage' ||
-      raw.className === 'UpdateEditChannelMessage' ||
-      raw.className === 'UpdateEditMessage' ||
-      raw.edited_message != null ||
-      raw.edited_channel_post != null
-    ) {
-      return true;
-    }
-    const innerMsg = raw.message as Record<string, unknown> | undefined;
-    if (innerMsg && (innerMsg.edit_date != null || innerMsg.editDate != null)) {
-      return true;
-    }
-  }
-  return false;
-}

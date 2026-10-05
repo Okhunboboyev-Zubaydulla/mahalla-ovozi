@@ -112,6 +112,11 @@ export async function synchronizeOperationalIssues(
 
     // 2. Step 1: Process incoming observations that evaluate to failure issues
     for (const obs of observations) {
+      if (obs.errorCode === 'UNRECOVERABLE_GAP') {
+        // UNRECOVERABLE_GAP is managed as a USERBOT operational issue by UserbotConnectionManager.
+        // It surfaces in message_intake observations as Degraded without duplicating the issue.
+        continue;
+      }
       const severity = classifyIssueSeverity(obs);
       if (!severity) {
         continue;

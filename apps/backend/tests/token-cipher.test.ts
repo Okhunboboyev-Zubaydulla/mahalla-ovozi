@@ -5,18 +5,26 @@ import {
   decryptToken,
   maskBotToken,
   getEncryptionKey,
-  FALLBACK_DEV_KEY,
+  getActiveKeyVersion,
+  resolveKeyForVersion,
+  assertEncryptionKeyConfigured,
+  MissingEncryptionKeyError,
+  UnresolvableKeyVersionError,
+  InvalidKeyLengthError,
 } from '../src/adapters/crypto/token-cipher.js';
+import { buildHttpServer } from '../src/entrypoints/http.js';
+import { startWorker } from '../src/entrypoints/worker.js';
+import { startUserbotService } from '../src/entrypoints/userbot.js';
 
 describe('Cryptographic Token Cipher (AES-256-GCM)', () => {
-  const originalEnv = process.env;
+  const originalEnv = { ...process.env };
 
   beforeEach(() => {
     process.env = { ...originalEnv };
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    process.env = { ...originalEnv };
   });
 
   describe('Key Normalization and Derivation (getEncryptionKey)', () => {
@@ -43,36 +51,109 @@ describe('Cryptographic Token Cipher (AES-256-GCM)', () => {
       expect(keyBuffer.toString('utf8')).toBe(stringKey);
     });
 
-    it('throws descriptive error when key does not resolve to 32 bytes', () => {
+    it('throws descriptive InvalidKeyLengthError when key does not resolve to 32 bytes', () => {
+      expect(() => getEncryptionKey('short_key')).toThrow(InvalidKeyLengthError);
       expect(() => getEncryptionKey('short_key')).toThrow(
-        /Invalid ENCRYPTION_KEY length: must resolve to 32 bytes \(256 bits\)/,
+        /Invalid overrideKey length: must resolve to 32 bytes \(256 bits\)/,
       );
-      expect(() => getEncryptionKey('a'.repeat(60))).toThrow(
-        /Invalid ENCRYPTION_KEY length: must resolve to 32 bytes \(256 bits\)/,
-      );
+      expect(() => getEncryptionKey('a'.repeat(60))).toThrow(InvalidKeyLengthError);
     });
 
-    it('falls back to dev key in non-production when ENCRYPTION_KEY is unset', () => {
+    it('throws MissingEncryptionKeyError naming ENCRYPTION_KEY in every environment when unset', () => {
       delete process.env.ENCRYPTION_KEY;
-      process.env.NODE_ENV = 'test';
+
+      for (const envName of ['test', 'development', 'staging', 'production', undefined]) {
+        if (envName === undefined) {
+          delete process.env.NODE_ENV;
+        } else {
+          process.env.NODE_ENV = envName;
+        }
+
+        expect(() => getEncryptionKey()).toThrow(MissingEncryptionKeyError);
+        expect(() => getEncryptionKey()).toThrow(/ENCRYPTION_KEY must be configured/);
+        expect(() => getEncryptionKey()).toThrow(/missing environment variable: ENCRYPTION_KEY/);
+      }
+    });
+
+    it('has no fallback key literal and returns key strictly from environment', () => {
+      process.env.ENCRYPTION_KEY = 'valid_env_key_exactly_32_bytes!!';
       const keyBuffer = getEncryptionKey();
-      expect(keyBuffer.length).toBe(32);
-      expect(keyBuffer.toString('utf8')).toBe(FALLBACK_DEV_KEY);
-    });
-
-    it('throws error in production when ENCRYPTION_KEY is unset', () => {
-      delete process.env.ENCRYPTION_KEY;
-      process.env.NODE_ENV = 'production';
-      expect(() => getEncryptionKey()).toThrow(
-        /ENCRYPTION_KEY must be configured in production/,
-      );
+      expect(keyBuffer.toString('utf8')).toBe('valid_env_key_exactly_32_bytes!!');
     });
   });
 
-  describe('Encryption and Decryption Roundtrip', () => {
+  describe('Active Key Version and Version Resolution', () => {
+    it('defaults active key version to v1 when unset', () => {
+      delete process.env.ENCRYPTION_KEY_VERSION;
+      expect(getActiveKeyVersion()).toBe('v1');
+    });
+
+    it('respects ENCRYPTION_KEY_VERSION environment variable', () => {
+      process.env.ENCRYPTION_KEY_VERSION = 'v2';
+      expect(getActiveKeyVersion()).toBe('v2');
+    });
+
+    it('resolves key for active version from ENCRYPTION_KEY', () => {
+      process.env.ENCRYPTION_KEY = 'active_key_bytes_32_length_ok123';
+      delete process.env.ENCRYPTION_KEY_VERSION; // active is v1
+
+      const resolved = resolveKeyForVersion('v1');
+      expect(resolved.toString('utf8')).toBe('active_key_bytes_32_length_ok123');
+    });
+
+    it('resolves historical key from ENCRYPTION_KEY_<VERSION> during dual-key window', () => {
+      process.env.ENCRYPTION_KEY_VERSION = 'v2';
+      process.env.ENCRYPTION_KEY_V2 = 'key_version_2_32_bytes_length!!!';
+      process.env.ENCRYPTION_KEY_V1 = 'key_version_1_32_bytes_length!!!';
+
+      const v1Key = resolveKeyForVersion('v1');
+      const v2Key = resolveKeyForVersion('v2');
+
+      expect(v1Key.toString('utf8')).toBe('key_version_1_32_bytes_length!!!');
+      expect(v2Key.toString('utf8')).toBe('key_version_2_32_bytes_length!!!');
+    });
+
+    it('throws UnresolvableKeyVersionError when key version is unknown / not configured', () => {
+      process.env.ENCRYPTION_KEY_VERSION = 'v2';
+      process.env.ENCRYPTION_KEY = 'key_version_2_32_bytes_length!!!';
+      delete process.env.ENCRYPTION_KEY_V1;
+
+      expect(() => resolveKeyForVersion('v1')).toThrow(UnresolvableKeyVersionError);
+      expect(() => resolveKeyForVersion('v1')).toThrow(
+        /Unresolvable encryption key version 'v1': no encryption key configured/,
+      );
+      // Ensures it NEVER silently falls back to active key
+      expect(() => resolveKeyForVersion('v1')).toThrow(/expected ENCRYPTION_KEY_V1/);
+    });
+
+    it('throws UnresolvableKeyVersionError when key version is missing or null', () => {
+      expect(() => resolveKeyForVersion(null)).toThrow(UnresolvableKeyVersionError);
+      expect(() => resolveKeyForVersion(undefined)).toThrow(UnresolvableKeyVersionError);
+      expect(() => resolveKeyForVersion('')).toThrow(UnresolvableKeyVersionError);
+      expect(() => resolveKeyForVersion('   ')).toThrow(UnresolvableKeyVersionError);
+    });
+
+    it('supports custom key dictionary override', () => {
+      const keys = {
+        v1: 'custom_v1_key_32_bytes_length!!!',
+        v2: 'custom_v2_key_32_bytes_length!!!',
+      };
+
+      const resolvedV1 = resolveKeyForVersion('v1', keys);
+      const resolvedV2 = resolveKeyForVersion('v2', keys);
+
+      expect(resolvedV1.toString('utf8')).toBe(keys.v1);
+      expect(resolvedV2.toString('utf8')).toBe(keys.v2);
+    });
+  });
+
+  describe('Encryption and Decryption Roundtrip with Key Versioning', () => {
     const sampleToken = '123456789:ABCdefGHIjklMNOpqrSTUvwxYZ_1234567';
 
-    it('successfully encrypts and decrypts a Telegram token', () => {
+    it('successfully encrypts with active version and records it in tokenKeyVersion', () => {
+      process.env.ENCRYPTION_KEY = 'test_encryption_key_32_bytes_ok!';
+      delete process.env.ENCRYPTION_KEY_VERSION; // active is v1
+
       const payload = encryptToken(sampleToken);
 
       expect(payload).toHaveProperty('encryptedToken');
@@ -81,16 +162,74 @@ describe('Cryptographic Token Cipher (AES-256-GCM)', () => {
       expect(payload.tokenKeyVersion).toBe('v1');
       expect(payload.tokenMasked).toBe('123456789:••••••••••••');
 
-      // IV is 12 bytes -> 24 hex characters
-      expect(payload.tokenIv.length).toBe(24);
-      // Tag is 16 bytes -> 32 hex characters
-      expect(payload.tokenTag.length).toBe(32);
+      const decrypted = decryptToken(payload);
+      expect(decrypted).toBe(sampleToken);
+    });
+
+    it('encrypts with explicit active version when rotated to v2', () => {
+      process.env.ENCRYPTION_KEY_VERSION = 'v2';
+      process.env.ENCRYPTION_KEY_V2 = 'active_v2_key_32_bytes_length!!!';
+
+      const payload = encryptToken(sampleToken);
+      expect(payload.tokenKeyVersion).toBe('v2');
 
       const decrypted = decryptToken(payload);
       expect(decrypted).toBe(sampleToken);
     });
 
+    it('decrypts older v1 payload when dual keys (v1 and v2) are configured', () => {
+      // 1. Encrypt with v1
+      process.env.ENCRYPTION_KEY_VERSION = 'v1';
+      process.env.ENCRYPTION_KEY = 'key_version_1_32_bytes_length!!!';
+      const v1Payload = encryptToken(sampleToken);
+      expect(v1Payload.tokenKeyVersion).toBe('v1');
+
+      // 2. Rotate to v2 and configure both keys
+      process.env.ENCRYPTION_KEY_VERSION = 'v2';
+      process.env.ENCRYPTION_KEY = 'key_version_2_32_bytes_length!!!';
+      process.env.ENCRYPTION_KEY_V1 = 'key_version_1_32_bytes_length!!!';
+
+      // 3. New writes use v2
+      const v2Payload = encryptToken('new_payload_sample_text_123');
+      expect(v2Payload.tokenKeyVersion).toBe('v2');
+
+      // 4. Old v1 payload and new v2 payload both decrypt correctly from same runtime
+      expect(decryptToken(v1Payload)).toBe(sampleToken);
+      expect(decryptToken(v2Payload)).toBe('new_payload_sample_text_123');
+    });
+
+    it('throws UnresolvableKeyVersionError when decrypting payload with unconfigured version', () => {
+      process.env.ENCRYPTION_KEY_VERSION = 'v2';
+      process.env.ENCRYPTION_KEY = 'key_version_2_32_bytes_length!!!';
+      delete process.env.ENCRYPTION_KEY_V1;
+
+      const payload = {
+        encryptedToken: 'abcdef123456',
+        tokenIv: 'abcdef1234567890abcdef12',
+        tokenTag: 'abcdef1234567890abcdef1234567890',
+        tokenKeyVersion: 'v1',
+      };
+
+      expect(() => decryptToken(payload)).toThrow(UnresolvableKeyVersionError);
+      expect(() => decryptToken(payload)).toThrow(/Unresolvable encryption key version 'v1'/);
+    });
+
+    it('throws UnresolvableKeyVersionError when decrypting payload with missing or null version', () => {
+      process.env.ENCRYPTION_KEY = 'active_key_bytes_32_length_ok123';
+
+      const payloadNoVersion = {
+        encryptedToken: 'abcdef123456',
+        tokenIv: 'abcdef1234567890abcdef12',
+        tokenTag: 'abcdef1234567890abcdef1234567890',
+        tokenKeyVersion: null as unknown as string,
+      };
+
+      expect(() => decryptToken(payloadNoVersion)).toThrow(UnresolvableKeyVersionError);
+      expect(() => decryptToken(payloadNoVersion)).toThrow(/key version is missing or null/);
+    });
+
     it('uses a unique random IV for each encryption pass', () => {
+      process.env.ENCRYPTION_KEY = 'test_encryption_key_32_bytes_ok!';
       const payload1 = encryptToken(sampleToken);
       const payload2 = encryptToken(sampleToken);
 
@@ -100,23 +239,18 @@ describe('Cryptographic Token Cipher (AES-256-GCM)', () => {
       expect(decryptToken(payload1)).toBe(sampleToken);
       expect(decryptToken(payload2)).toBe(sampleToken);
     });
-
-    it('supports custom keyVersion and custom key override', () => {
-      const customKey = crypto.randomBytes(32).toString('hex');
-      const payload = encryptToken(sampleToken, 'v2', customKey);
-
-      expect(payload.tokenKeyVersion).toBe('v2');
-      const decrypted = decryptToken(payload, customKey);
-      expect(decrypted).toBe(sampleToken);
-    });
   });
 
   describe('Tampering and Authentication Tag Integrity', () => {
     const sampleToken = '987654321:XYZabc123_SecureTelegramBotToken';
+    const validKey = 'valid_test_key_32_bytes_length!!';
+
+    beforeEach(() => {
+      process.env.ENCRYPTION_KEY = validKey;
+    });
 
     it('throws error when ciphertext is tampered with', () => {
       const payload = encryptToken(sampleToken);
-      // Flip the last character of the hex ciphertext
       const tamperedHex =
         payload.encryptedToken.slice(0, -1) +
         (payload.encryptedToken.endsWith('a') ? 'b' : 'a');
@@ -131,7 +265,6 @@ describe('Cryptographic Token Cipher (AES-256-GCM)', () => {
 
     it('throws error when authentication tag is tampered with', () => {
       const payload = encryptToken(sampleToken);
-      // Flip the last character of the hex tag
       const tamperedTag =
         payload.tokenTag.slice(0, -1) +
         (payload.tokenTag.endsWith('0') ? '1' : '0');
@@ -164,6 +297,54 @@ describe('Cryptographic Token Cipher (AES-256-GCM)', () => {
       const payload = encryptToken(sampleToken, 'v1', key1);
 
       expect(() => decryptToken(payload, key2)).toThrow();
+    });
+  });
+
+  describe('Runtime Startup Fail-Fast Invariant', () => {
+    it('assertEncryptionKeyConfigured succeeds when active key is configured', () => {
+      process.env.ENCRYPTION_KEY = 'test_encryption_key_32_bytes_ok!';
+      expect(() => assertEncryptionKeyConfigured()).not.toThrow();
+    });
+
+    it('assertEncryptionKeyConfigured fails in every environment name when ENCRYPTION_KEY is unset', () => {
+      delete process.env.ENCRYPTION_KEY;
+
+      for (const envName of ['production', 'staging', 'development', 'test', undefined]) {
+        if (envName === undefined) {
+          delete process.env.NODE_ENV;
+        } else {
+          process.env.NODE_ENV = envName;
+        }
+
+        expect(() => assertEncryptionKeyConfigured()).toThrow(MissingEncryptionKeyError);
+        expect(() => assertEncryptionKeyConfigured()).toThrow(
+          /missing environment variable: ENCRYPTION_KEY/,
+        );
+      }
+    });
+
+    it('HTTP server runtime fails to start when ENCRYPTION_KEY is missing in any environment', async () => {
+      delete process.env.ENCRYPTION_KEY;
+      process.env.NODE_ENV = 'development';
+
+      await expect(buildHttpServer()).rejects.toThrow(MissingEncryptionKeyError);
+      await expect(buildHttpServer()).rejects.toThrow(/missing environment variable: ENCRYPTION_KEY/);
+    });
+
+    it('Worker runtime fails to start when ENCRYPTION_KEY is missing in any environment', async () => {
+      delete process.env.ENCRYPTION_KEY;
+      process.env.NODE_ENV = 'test';
+
+      await expect(startWorker()).rejects.toThrow(MissingEncryptionKeyError);
+      await expect(startWorker()).rejects.toThrow(/missing environment variable: ENCRYPTION_KEY/);
+    });
+
+    it('Userbot service runtime fails to start when ENCRYPTION_KEY is missing in any environment', async () => {
+      delete process.env.ENCRYPTION_KEY;
+      process.env.NODE_ENV = 'production';
+
+      await expect(startUserbotService()).rejects.toThrow(MissingEncryptionKeyError);
+      await expect(startUserbotService()).rejects.toThrow(/missing environment variable: ENCRYPTION_KEY/);
     });
   });
 

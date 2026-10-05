@@ -163,6 +163,17 @@ export function deriveIssueMetadata(
     }
 
     case 'message_intake': {
+      if (errorCode === 'UNRECOVERABLE_GAP') {
+        return {
+          issueCategory: 'UNRECOVERABLE_GAP',
+          sanitizedTitle: 'Telegram хабарлар узилиши (Incomplete Awareness / Тиклаб бўлмайдиган бўшлиқ)',
+          sanitizedDescription: districtName
+            ? `${districtName} учун Telegram хабарлари узилиши (gap) аниқланди. Билиш даражаси тўлиқ эмас (incomplete awareness).`
+            : 'Telegram хабарлари узилиши (gap) аниқланди. Билиш даражаси тўлиқ эмас (incomplete awareness).',
+          recommendedAction: 'Ўтказиб юборилган вақт оралиғидаги хабарларни қўлда текширинг',
+          targetRoute: districtId ? `/telegram-setup?districtId=${districtId}` : '/telegram-setup',
+        };
+      }
       return {
         issueCategory: 'MESSAGE_INTAKE_DELAY',
         sanitizedTitle: 'Хабарларни қабул қилишда кечикиш',

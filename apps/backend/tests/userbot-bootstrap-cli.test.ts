@@ -27,6 +27,7 @@ import {
   SignInWithPasswordParams,
   PhoneNumberBannedError,
   InvalidPhoneCodeError,
+  UserbotCredentialValidationError,
 } from '../src/modules/userbot-session/userbot-auth-port.js';
 import { DistrictNotFoundError } from '../src/modules/districts/districts-service.js';
 
@@ -439,6 +440,191 @@ describe('District Userbot Session Bootstrap CLI & Domain Service (Ticket 05)', 
     } finally {
       auditSpy.mockRestore();
     }
+  });
+
+  it('Test 8: Failed bootstrap preserves a previously stored credential byte-for-byte (no partial credential overwrite)', async () => {
+    const districtId = await createTestDistrict('BootstrapNoPartialCredential');
+    const phoneNumber = '+998907770011';
+    const apiId = '81007070';
+    const apiHash = 'mock_api_hash_no_partial';
+    const preExistingSessionString = '1BJWNg...preExistingStoredSessionMaterial...';
+
+    // The session is created WITH a stored session string, so a successful bootstrap would
+    // rotate the stored ciphertext. A failed bootstrap must leave that ciphertext untouched
+    // rather than partially overwriting any of the four encryption columns.
+    await createDistrictUserbotSession(db, {
+      districtId,
+      phoneNumber,
+      apiId,
+      apiHash,
+      sessionString: preExistingSessionString,
+    });
+
+    const [before] = await db
+      .select()
+      .from(districtTelegramUserbotSessions)
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+      .limit(1);
+
+    expect(before).toBeDefined();
+    expect(before?.status).toBe('PENDING');
+    expect(before?.sessionEncrypted).toBeTruthy();
+    expect(before?.sessionIv).toBeTruthy();
+    expect(before?.sessionTag).toBeTruthy();
+
+    // Fail the bootstrap AFTER a code was requested, so the failure lands on the late
+    // side of the flow with a fresh session string already produced by the auth client.
+    const mockAuth = new MockUserbotAuthClient();
+    mockAuth.sendCodeResult = { phoneCodeHash: 'code_hash_no_partial' };
+    mockAuth.signInError = new InvalidPhoneCodeError('PHONE_CODE_INVALID: wrong code');
+
+    await expect(
+      bootstrapUserbotSession(db, {
+        districtId,
+        getPhoneCode: async () => '00000',
+        authClient: mockAuth,
+      }),
+    ).rejects.toThrow(InvalidPhoneCodeError);
+
+    const [after] = await db
+      .select()
+      .from(districtTelegramUserbotSessions)
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+      .limit(1);
+
+    // Status unchanged, and every encryption column identical to its pre-bootstrap value.
+    expect(after?.status).toBe('PENDING');
+    expect(after?.sessionEncrypted).toBe(before?.sessionEncrypted);
+    expect(after?.sessionIv).toBe(before?.sessionIv);
+    expect(after?.sessionTag).toBe(before?.sessionTag);
+    expect(after?.sessionKeyVersion).toBe(before?.sessionKeyVersion);
+    expect(after?.lastSeenAt).toBeNull();
+
+    // The previously stored material is still the original plaintext, not a partial write.
+    const decrypted = await getDecryptedUserbotSession(db, districtId);
+    expect(decrypted?.sessionString).toBe(preExistingSessionString);
+  });
+
+  describe('Ticket 13: Credential Boundary Validation in Interactive Bootstrap', () => {
+    it('rejects bootstrap when session has malformed phoneNumber before attempting sendCode', async () => {
+      const districtId = await createTestDistrict('BootstrapBadPhone');
+
+      // Directly insert row with malformed phone number (simulating legacy data)
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: `dtus_${crypto.randomUUID()}`,
+        districtId,
+        phoneNumber: '+998 90 123 45 67', // contains spaces
+        apiId: '12345678',
+        status: 'PENDING',
+      });
+
+      const mockAuth = new MockUserbotAuthClient();
+
+      await expect(
+        bootstrapUserbotSession(db, {
+          districtId,
+          getPhoneCode: async () => '12345',
+          authClient: mockAuth,
+          apiHash: 'valid_api_hash_123',
+        }),
+      ).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(UserbotCredentialValidationError);
+        expect((err as UserbotCredentialValidationError).field).toBe('phoneNumber');
+        expect((err as UserbotCredentialValidationError).code).toBe('VALIDATION_ERROR');
+        return true;
+      });
+
+      // Assert NO protocol handshake was attempted
+      expect(mockAuth.sendCodeCalls).toHaveLength(0);
+    });
+
+    it('rejects bootstrap when session has non-numeric or non-positive apiId before attempting sendCode', async () => {
+      const districtId = await createTestDistrict('BootstrapBadApiId');
+
+      // Directly insert row with malformed apiId
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: `dtus_${crypto.randomUUID()}`,
+        districtId,
+        phoneNumber: '+998901234567',
+        apiId: '-5',
+        status: 'PENDING',
+      });
+
+      const mockAuth = new MockUserbotAuthClient();
+
+      await expect(
+        bootstrapUserbotSession(db, {
+          districtId,
+          getPhoneCode: async () => '12345',
+          authClient: mockAuth,
+          apiHash: 'valid_api_hash_123',
+        }),
+      ).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(UserbotCredentialValidationError);
+        expect((err as UserbotCredentialValidationError).field).toBe('apiId');
+        expect((err as UserbotCredentialValidationError).code).toBe('VALIDATION_ERROR');
+        return true;
+      });
+
+      // Assert NO protocol handshake was attempted
+      expect(mockAuth.sendCodeCalls).toHaveLength(0);
+    });
+
+    it('rejects bootstrap when apiHash is whitespace-only before attempting sendCode', async () => {
+      const districtId = await createTestDistrict('BootstrapWhitespaceHash');
+
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: `dtus_${crypto.randomUUID()}`,
+        districtId,
+        phoneNumber: '+998901234567',
+        apiId: '12345678',
+        status: 'PENDING',
+      });
+
+      const mockAuth = new MockUserbotAuthClient();
+
+      await expect(
+        bootstrapUserbotSession(db, {
+          districtId,
+          getPhoneCode: async () => '12345',
+          authClient: mockAuth,
+          apiHash: '   ',
+        }),
+      ).rejects.toSatisfy((err: unknown) => {
+        expect(err).toBeInstanceOf(UserbotCredentialValidationError);
+        expect((err as UserbotCredentialValidationError).field).toBe('apiHash');
+        expect((err as UserbotCredentialValidationError).code).toBe('VALIDATION_ERROR');
+        return true;
+      });
+
+      expect(mockAuth.sendCodeCalls).toHaveLength(0);
+    });
+
+    it('accepts bootstrap with non-empty apiHash matching no expected pattern (non-emptiness check)', async () => {
+      const districtId = await createTestDistrict('BootstrapUnusualHash');
+      const unusualHash = 'non_standard_pattern_hash_123456789';
+
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901234567',
+        apiId: '12345678',
+        apiHash: unusualHash,
+      });
+
+      const mockAuth = new MockUserbotAuthClient();
+      mockAuth.sendCodeResult = { phoneCodeHash: 'hash_unusual_ok' };
+      mockAuth.signInResult = { sessionString: 'session_unusual_ok_123' };
+
+      const result = await bootstrapUserbotSession(db, {
+        districtId,
+        getPhoneCode: async () => '12345',
+        authClient: mockAuth,
+      });
+
+      expect(result.status).toBe('ACTIVE');
+      expect(mockAuth.sendCodeCalls).toHaveLength(1);
+      expect(mockAuth.sendCodeCalls[0]?.apiHash).toBe(unusualHash);
+    });
   });
 });
 

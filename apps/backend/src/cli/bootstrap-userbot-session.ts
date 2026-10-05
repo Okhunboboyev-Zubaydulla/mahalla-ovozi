@@ -78,6 +78,17 @@ function promptHiddenPassword(prompt: string): Promise<string> {
 export async function runCli(): Promise<void> {
   console.log('=== Mahalla Ovozi — District Userbot Session Bootstrap ===\n');
 
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    console.log(`Ишлатиш:
+  node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx/esm src/cli/bootstrap-userbot-session.ts [опциялар]
+
+Опциялар:
+  --district-id, -d <id>   Туман ID си (масалан: dist_42aefae4-fdc4-4537-b524-47cddad6f2d2)
+  --help, -h               Ёрдам хабарини кўрсатиш
+`);
+    return;
+  }
+
   let districtId = '';
   const districtArgIdx = process.argv.findIndex(
     (arg) => arg === '--district-id' || arg === '-d',
@@ -95,10 +106,12 @@ export async function runCli(): Promise<void> {
     process.exit(1);
   }
 
-  const pool = createDbPool();
-  const db = createDbClient(pool);
+  let pool: ReturnType<typeof createDbPool> | null = null;
 
   try {
+    pool = createDbPool();
+    const db = createDbClient(pool);
+
     const session = await bootstrapUserbotSession(db, {
       districtId,
       getPhoneCode: async () => {
@@ -126,12 +139,15 @@ export async function runCli(): Promise<void> {
     process.exitCode = 1;
     throw error;
   } finally {
-    await pool.end();
+    if (pool) {
+      await pool.end();
+    }
   }
 }
 
 if (process.argv[1]?.includes('bootstrap-userbot-session')) {
-  runCli().catch(() => {
+  runCli().catch((err) => {
+    console.error('\n❌ Fatal CLI error:', err);
     process.exit(1);
   });
 }

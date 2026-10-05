@@ -30,6 +30,8 @@ import { registerUserbotSessionRoutes } from '../modules/userbot-session/userbot
 import type { BackupRetentionVerifier } from '../modules/subscriptions/ports/backup-retention-verifier.js';
 import type { ExternalTombstoneStore } from '../adapters/storage/external-tombstone-store.js';
 import { createBossClient, initBossQueues } from '../adapters/jobs/boss-client.js';
+import { assertEncryptionKeyConfigured } from '../adapters/crypto/token-cipher.js';
+import { serializeError } from '../utils/logger.js';
 import type PgBoss from 'pg-boss';
 import pg from 'pg';
 
@@ -92,12 +94,25 @@ export async function buildHttpServer(options?: {
   backupVerifier?: BackupRetentionVerifier;
   tombstoneStore?: ExternalTombstoneStore;
 }): Promise<FastifyInstance> {
+  assertEncryptionKeyConfigured();
+
   const server = Fastify({
     logger:
       process.env.NODE_ENV === 'test'
         ? false
         : {
             level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
+            serializers: {
+              err: (err: unknown) => {
+                const s = serializeError(err);
+                return {
+                  type: s.name || 'Error',
+                  message: s.message || (s.value ?? ''),
+                  stack: s.stack || '',
+                  ...s,
+                };
+              },
+            },
           },
     trustProxy: true,
   });

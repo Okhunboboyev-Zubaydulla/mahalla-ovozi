@@ -1,7 +1,7 @@
 import type pg from 'pg';
 import type PgBoss from 'pg-boss';
 import { eq, and, inArray, sql, gt, lt, desc } from 'drizzle-orm';
-import type { DbClient } from '../../../adapters/db/client.js';
+import { findUniqueViolation, type DbClient } from '../../../adapters/db/client.js';
 import {
   districts,
   telegramIntakeRecords,
@@ -721,9 +721,9 @@ export async function processSemanticRelevanceJobs(
               durationMs,
             }),
           );
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Handle unique violation gracefully for duplicate replays (AC 8 / Matrix #25)
-          if (err?.code === '23505' && String(err?.constraint).includes('ai_ops_district_op_target_idx')) {
+          if (findUniqueViolation(err, 'ai_ops_district_op_target_idx')) {
             console.log(
               JSON.stringify({
                 event: 'TELEGRAM_SEMANTIC_RELEVANCE_IGNORED_DUPLICATE_VIOLATION',

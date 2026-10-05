@@ -24,7 +24,7 @@ COPY apps/ ./apps/
 RUN pnpm --filter @mahalla-ovozi/api-contracts build && \
     pnpm --filter @mahalla-ovozi/web build
 
-# Stage 3: Production backend and worker runner
+# Stage 3: Production backend and worker runner (no MTProto client)
 FROM base AS runner
 WORKDIR /app
 
@@ -35,6 +35,10 @@ RUN mkdir -p /pnpm /app/deploy/backup && chown -R node:node /pnpm
 
 COPY --chown=node:node --from=builder /app /app
 
+# The HTTP API and the worker never open an MTProto connection. The userbot client is a
+# userbot-runtime dependency, so it is excluded here and carried only by userbot-runner.
+RUN rm -rf /app/node_modules/.pnpm/teleproto@* /app/apps/backend/node_modules/teleproto
+
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOST=0.0.0.0
@@ -43,6 +47,25 @@ ENV NODE_OPTIONS="--dns-result-order=ipv4first"
 USER node
 
 CMD ["pnpm", "--filter", "@mahalla-ovozi/backend", "exec", "node", "--import", "tsx/esm", "src/entrypoints/http.ts"]
+
+# Stage 3b: Production userbot runner (carries the userbot-only MTProto client)
+FROM base AS userbot-runner
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /pnpm && chown -R node:node /pnpm
+
+# Built from the same builder output as runner, but without the exclusion step, so this image
+# is the only one that resolves the MTProto client at runtime.
+COPY --chown=node:node --from=builder /app /app
+
+ENV NODE_ENV=production
+ENV NODE_OPTIONS="--dns-result-order=ipv4first"
+
+USER node
+
+CMD ["pnpm", "--filter", "@mahalla-ovozi/backend", "exec", "node", "--import", "tsx/esm", "src/entrypoints/userbot.ts"]
 
 # Stage 4: Production Caddy reverse proxy serving built SPA and proxying API
 FROM caddy:2-alpine AS caddy

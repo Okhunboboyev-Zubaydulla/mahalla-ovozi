@@ -31,6 +31,10 @@ const SENSITIVE_KEYS = new Set([
   'temporarypassword',
   'credential',
   'credentials',
+  'sessionstring',
+  'apihash',
+  'messagecontent',
+  'message',
 ]);
 
 export function redactStringValue(val: string): string {
@@ -88,7 +92,7 @@ export function classifyAuditActionCategory(action: string): AuditActionCategory
   if (
     action.startsWith('DISTRICT_TELEGRAM_BOT_') ||
     action.startsWith('DISTRICT_GROUP_') ||
-    action.startsWith('USERBOT_SESSION_')
+    action.startsWith('USERBOT_')
   ) {
     return 'TELEGRAM_INTEGRATION';
   }
@@ -116,7 +120,8 @@ export function determineAuditActionOutcome(
   if (
     metadata?.outcome === 'FAILURE' ||
     metadata?.status === 'FAILED' ||
-    metadata?.success === false
+    metadata?.success === false ||
+    metadata?.revocationSuccess === false
   ) {
     return 'FAILURE';
   }

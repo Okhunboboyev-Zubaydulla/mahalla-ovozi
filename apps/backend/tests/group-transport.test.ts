@@ -23,6 +23,7 @@ import {
 import {
   resolveDistrictBotAndGroup,
   resolveDistrictUserbotAndGroup,
+  resolveDistrictTransportAuthorization,
   processTelegramWebhookUpdate,
 } from '../src/modules/telegram-intake/telegram-intake-service.js';
 import type { TelegramUpdate } from '../src/adapters/telegram/telegram-types.js';
@@ -690,6 +691,340 @@ describe('Ticket 06: Per-Group Transport Selection Integration Tests', () => {
       if (!result.authorized) {
         expect(result.reason).toBe('TRANSPORT_MISMATCH');
       }
+    });
+  });
+
+  // --- Ticket 19: Parity & Factored Transport Authorization Resolver ---
+  describe('Ticket 19: Parity & Factored Transport Authorization Resolver', () => {
+    it('achieves exact parity on valid BOT_API authorization with separated botId and transport', async () => {
+      const chatId = nextTestChatId();
+      const groupId = await createGroup(testDistrictId, 'Parity Bot Api Mahalla', chatId, 'BOT_API');
+
+      const delegatorRes = await resolveDistrictBotAndGroup(db, testBotId, chatId);
+      const factoredRes = await resolveDistrictTransportAuthorization(db, {
+        transport: 'BOT_API',
+        botId: testBotId,
+        chatId,
+      });
+
+      expect(factoredRes).toEqual(delegatorRes);
+      expect(factoredRes.authorized).toBe(true);
+      if (factoredRes.authorized) {
+        expect(factoredRes.districtId).toBe(testDistrictId);
+        expect(factoredRes.botId).toBe(testBotId);
+        expect(factoredRes.groupId).toBe(groupId);
+        expect(factoredRes.transport).toBe('BOT_API');
+      }
+    });
+
+    it('achieves exact parity on valid USERBOT authorization with null botId and transport', async () => {
+      await createActiveUserbotSession(testDistrictId);
+      const chatId = nextTestChatId();
+      const groupId = await createGroup(testDistrictId, 'Parity Userbot Mahalla', chatId, 'USERBOT');
+
+      const delegatorRes = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+      const factoredRes = await resolveDistrictTransportAuthorization(db, {
+        transport: 'USERBOT',
+        districtId: testDistrictId,
+        chatId,
+      });
+
+      expect(factoredRes).toEqual(delegatorRes);
+      expect(factoredRes.authorized).toBe(true);
+      if (factoredRes.authorized) {
+        expect(factoredRes.districtId).toBe(testDistrictId);
+        expect(factoredRes.mahallaName).toBe('Parity Userbot Mahalla');
+        expect(factoredRes.botId).toBeNull();
+        expect(factoredRes.groupId).toBe(groupId);
+        expect(factoredRes.transport).toBe('USERBOT');
+      }
+    });
+
+    describe('Stage 1: Credential Check Parity', () => {
+      it('rejects unknown bot with BOT_NOT_FOUND across both resolvers', async () => {
+        const unknownBotId = `unknown_bot_${Date.now()}`;
+        const chatId = nextTestChatId();
+
+        const delegatorRes = await resolveDistrictBotAndGroup(db, unknownBotId, chatId);
+        const factoredRes = await resolveDistrictTransportAuthorization(db, {
+          transport: 'BOT_API',
+          botId: unknownBotId,
+          chatId,
+        });
+
+        expect(factoredRes).toEqual(delegatorRes);
+        expect(factoredRes).toEqual({ authorized: false, reason: 'BOT_NOT_FOUND' });
+      });
+
+      it('rejects invalid bot with BOT_NOT_VALID across both resolvers', async () => {
+        const invalidDistrictId = `dist_inv_${crypto.randomUUID().slice(0, 8)}`;
+        await db.insert(districts).values({
+          id: invalidDistrictId,
+          name: `Invalid Bot District ${crypto.randomUUID()}`,
+          status: 'ACTIVE',
+          accessEligible: true,
+        });
+        const invalidBotId = `invalid_bot_${Date.now()}`;
+        const enc = encryptToken('test_token');
+        await db.insert(districtTelegramBots).values({
+          id: `dtb_${crypto.randomUUID()}`,
+          districtId: invalidDistrictId,
+          botId: invalidBotId,
+          botFirstName: 'Invalid Bot',
+          botUsername: 'invalid_bot',
+          encryptedToken: enc.encryptedToken,
+          tokenIv: enc.tokenIv,
+          tokenTag: enc.tokenTag,
+          tokenKeyVersion: enc.tokenKeyVersion,
+          tokenMasked: `${invalidBotId}:••••••••••••`,
+          status: 'INVALID',
+          lastValidatedAt: new Date(),
+        });
+        const chatId = nextTestChatId();
+
+        const delegatorRes = await resolveDistrictBotAndGroup(db, invalidBotId, chatId);
+        const factoredRes = await resolveDistrictTransportAuthorization(db, {
+          transport: 'BOT_API',
+          botId: invalidBotId,
+          chatId,
+        });
+
+        expect(factoredRes).toEqual(delegatorRes);
+        expect(factoredRes).toEqual({ authorized: false, reason: 'BOT_NOT_VALID' });
+      });
+
+      it('rejects inactive userbot session (missing, PENDING, BANNED, DISABLED) with USERBOT_SESSION_NOT_ACTIVE across both resolvers', async () => {
+        const chatId = nextTestChatId();
+        await createGroup(testDistrictId, 'Parity Inactive Session Mahalla', chatId, 'USERBOT');
+
+        // Missing session
+        const delMissing = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facMissing = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facMissing).toEqual(delMissing);
+        expect(facMissing).toEqual({ authorized: false, reason: 'USERBOT_SESSION_NOT_ACTIVE' });
+
+        // PENDING session
+        const [pendingRow] = await db
+          .insert(districtTelegramUserbotSessions)
+          .values({
+            id: `dtus_${crypto.randomUUID()}`,
+            districtId: testDistrictId,
+            phoneNumber: '+998901234567',
+            apiId: '1234567',
+            status: 'PENDING',
+          })
+          .returning();
+
+        const delPending = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facPending = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facPending).toEqual(delPending);
+        expect(facPending).toEqual({ authorized: false, reason: 'USERBOT_SESSION_NOT_ACTIVE' });
+
+        // BANNED session
+        await db
+          .update(districtTelegramUserbotSessions)
+          .set({ status: 'BANNED' })
+          .where(eq(districtTelegramUserbotSessions.id, pendingRow.id));
+
+        const delBanned = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facBanned = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facBanned).toEqual(delBanned);
+        expect(facBanned).toEqual({ authorized: false, reason: 'USERBOT_SESSION_NOT_ACTIVE' });
+
+        // DISABLED session
+        await db
+          .update(districtTelegramUserbotSessions)
+          .set({ status: 'DISABLED' })
+          .where(eq(districtTelegramUserbotSessions.id, pendingRow.id));
+
+        const delDisabled = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facDisabled = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facDisabled).toEqual(delDisabled);
+        expect(facDisabled).toEqual({ authorized: false, reason: 'USERBOT_SESSION_NOT_ACTIVE' });
+      });
+    });
+
+    describe('Stage 2: District Status & Access Eligibility Parity', () => {
+      it('rejects cancelled district with DISTRICT_NOT_ACTIVE across both resolvers', async () => {
+        await createActiveUserbotSession(testDistrictId);
+        const chatId = nextTestChatId();
+        await createGroup(testDistrictId, 'Parity Cancelled Mahalla', chatId, 'USERBOT');
+
+        await db
+          .update(districts)
+          .set({ status: 'CANCELLED' })
+          .where(eq(districts.id, testDistrictId));
+
+        const delUserbot = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facUserbot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facUserbot).toEqual(delUserbot);
+        expect(facUserbot).toEqual({ authorized: false, reason: 'DISTRICT_NOT_ACTIVE' });
+
+        const delBot = await resolveDistrictBotAndGroup(db, testBotId, chatId);
+        const facBot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'BOT_API',
+          botId: testBotId,
+          chatId,
+        });
+        expect(facBot).toEqual(delBot);
+        expect(facBot).toEqual({ authorized: false, reason: 'DISTRICT_NOT_ACTIVE' });
+      });
+
+      it('rejects accessEligible=false with DISTRICT_NOT_ACTIVE across both resolvers', async () => {
+        await createActiveUserbotSession(testDistrictId);
+        const chatId = nextTestChatId();
+        await createGroup(testDistrictId, 'Parity Ineligible Mahalla', chatId, 'USERBOT');
+
+        await db
+          .update(districts)
+          .set({ accessEligible: false })
+          .where(eq(districts.id, testDistrictId));
+
+        const delUserbot = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facUserbot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facUserbot).toEqual(delUserbot);
+        expect(facUserbot).toEqual({ authorized: false, reason: 'DISTRICT_NOT_ACTIVE' });
+      });
+    });
+
+    describe('Stage 3 & 5: Group Mapping & Approval Parity', () => {
+      it('rejects unmapped group with GROUP_NOT_APPROVED across both resolvers', async () => {
+        await createActiveUserbotSession(testDistrictId);
+        const unknownChatId = nextTestChatId();
+
+        const delUserbot = await resolveDistrictUserbotAndGroup(db, testDistrictId, unknownChatId);
+        const facUserbot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId: unknownChatId,
+        });
+        expect(facUserbot).toEqual(delUserbot);
+        expect(facUserbot).toEqual({ authorized: false, reason: 'GROUP_NOT_APPROVED' });
+
+        const delBot = await resolveDistrictBotAndGroup(db, testBotId, unknownChatId);
+        const facBot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'BOT_API',
+          botId: testBotId,
+          chatId: unknownChatId,
+        });
+        expect(facBot).toEqual(delBot);
+        expect(facBot).toEqual({ authorized: false, reason: 'GROUP_NOT_APPROVED' });
+      });
+
+      it('rejects PENDING group with GROUP_NOT_APPROVED across both resolvers', async () => {
+        await createActiveUserbotSession(testDistrictId);
+        const chatId = nextTestChatId();
+        await db.insert(districtTelegramGroups).values({
+          id: `dtg_${crypto.randomUUID()}`,
+          districtId: testDistrictId,
+          mahallaName: 'Pending Parity Mahalla',
+          telegramChatId: chatId,
+          telegramChatTitle: 'Pending Parity Chat',
+          status: 'PENDING',
+          transport: 'USERBOT',
+        });
+
+        const delUserbot = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facUserbot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facUserbot).toEqual(delUserbot);
+        expect(facUserbot).toEqual({ authorized: false, reason: 'GROUP_NOT_APPROVED' });
+      });
+    });
+
+    describe('Stage 4: Cross-District Isolation Parity', () => {
+      it('rejects foreign group with CROSS_DISTRICT_MISMATCH across both resolvers', async () => {
+        await createActiveUserbotSession(testDistrictId);
+
+        const foreignDistrictId = `dist_${crypto.randomUUID()}`;
+        await db.insert(districts).values({
+          id: foreignDistrictId,
+          name: `Foreign District ${crypto.randomUUID()}`,
+          status: 'ACTIVE',
+          accessEligible: true,
+        });
+        await createActiveUserbotSession(foreignDistrictId);
+
+        const chatId = nextTestChatId();
+        await createGroup(foreignDistrictId, 'Foreign Mahalla', chatId, 'USERBOT');
+
+        const delUserbot = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facUserbot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facUserbot).toEqual(delUserbot);
+        expect(facUserbot).toEqual({ authorized: false, reason: 'CROSS_DISTRICT_MISMATCH' });
+
+        const delBot = await resolveDistrictBotAndGroup(db, testBotId, chatId);
+        const facBot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'BOT_API',
+          botId: testBotId,
+          chatId,
+        });
+        expect(facBot).toEqual(delBot);
+        expect(facBot).toEqual({ authorized: false, reason: 'CROSS_DISTRICT_MISMATCH' });
+      });
+    });
+
+    describe('Stage 6: Mutual Exclusivity Parity', () => {
+      it('rejects BOT_API target on USERBOT group with TRANSPORT_MISMATCH across both resolvers', async () => {
+        await createActiveUserbotSession(testDistrictId);
+        const chatId = nextTestChatId();
+        await createGroup(testDistrictId, 'Exclusivity Parity Mahalla', chatId, 'USERBOT');
+
+        const delBot = await resolveDistrictBotAndGroup(db, testBotId, chatId);
+        const facBot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'BOT_API',
+          botId: testBotId,
+          chatId,
+        });
+        expect(facBot).toEqual(delBot);
+        expect(facBot).toEqual({ authorized: false, reason: 'TRANSPORT_MISMATCH' });
+      });
+
+      it('rejects USERBOT target on BOT_API group with TRANSPORT_MISMATCH across both resolvers', async () => {
+        await createActiveUserbotSession(testDistrictId);
+        const chatId = nextTestChatId();
+        await createGroup(testDistrictId, 'Exclusivity Parity Mahalla 2', chatId, 'BOT_API');
+
+        const delUserbot = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
+        const facUserbot = await resolveDistrictTransportAuthorization(db, {
+          transport: 'USERBOT',
+          districtId: testDistrictId,
+          chatId,
+        });
+        expect(facUserbot).toEqual(delUserbot);
+        expect(facUserbot).toEqual({ authorized: false, reason: 'TRANSPORT_MISMATCH' });
+      });
     });
   });
 

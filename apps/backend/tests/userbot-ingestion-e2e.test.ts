@@ -32,7 +32,7 @@ import { processTopicAssignmentJobs } from '../src/modules/topics/jobs/topic-ass
 import { ensureDefaultAiProfiles } from '../src/adapters/db/seeds.js';
 import {
   createDistrictUserbotSession,
-  updateUserbotSessionStatus,
+  enableDistrictUserbotSession,
 } from '../src/modules/userbot-session/index.js';
 import {
   UserbotConnectionManager,
@@ -55,6 +55,7 @@ class MockUserbotClient implements UserbotClientPort {
     reconnect: [] as (() => void)[],
     error: [] as ((err: Error) => void)[],
     ban: [] as ((details?: { reason?: string; error?: Error }) => void)[],
+    gap: [] as ((details?: { reason?: string; lastKnownPosition?: string | null; error?: Error }) => void)[],
   };
 
   constructor(params: {
@@ -209,7 +210,7 @@ describe('Ticket 09: Userbot Ingestion End-to-End for one Mahalla', () => {
       apiHash: 'test_api_hash',
       sessionString: `test_session_${activeDistrictId}`,
     });
-    await updateUserbotSessionStatus(db, activeDistrictId, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, activeDistrictId);
 
     // Provision an active Telegram Bot for BOT_API intake
     activeBotId = `bot_e2e_${crypto.randomUUID().slice(0, 8)}`;

@@ -14,13 +14,15 @@
     "worker": "node --watch --env-file-if-exists=.env --import tsx/esm src/entrypoints/worker.ts",
     "userbot": "node --watch --env-file-if-exists=.env --import tsx/esm src/entrypoints/userbot.ts",
     "cli:manage-po": "node --env-file-if-exists=.env --import tsx/esm src/cli/manage-product-owner.ts",
-    "cli:bootstrap-userbot": "node --env-file-if-exists=.env --import tsx/esm src/cli/bootstrap-userbot-session.ts",
+    "cli:bootstrap-userbot": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx/esm src/cli/bootstrap-userbot-session.ts",
     "cli:clean-test-data": "node --env-file-if-exists=.env --import tsx/esm src/cli/clean-test-data.ts",
     "cli:purge-messages": "node --env-file-if-exists=.env --import tsx/esm src/cli/purge-messages.ts",
     "purge-messages": "node --env-file-if-exists=.env --import tsx/esm src/cli/purge-messages.ts",
     "cli:view-evidence": "node --env-file-if-exists=.env --import tsx/esm src/cli/view-evidence.ts",
     "cli:verify-deepinfra": "node --env-file-if-exists=.env --import tsx/esm src/cli/verify-deepinfra.ts",
     "cli:reconcile-retention": "node --env-file-if-exists=.env --import tsx/esm src/cli/reconcile-retention.ts",
+    "cli:reencrypt-userbot": "node --env-file-if-exists=.env --import tsx/esm src/cli/reencrypt-userbot-sessions.ts",
+    "cli:backfill-api-hash": "node --env-file-if-exists=.env --import tsx/esm src/cli/backfill-encrypted-api-hash.ts",
     "reconcile-restore": "node --env-file-if-exists=.env --import tsx/esm src/entrypoints/reconcile-restore.ts"
   },
   "dependencies": {
@@ -35,7 +37,7 @@
     "fastify-type-provider-zod": "^4.0.2",
     "pg": "^8.13.3",
     "pg-boss": "^10.4.2",
-    "telegram": "^2.26.22",
+    "teleproto": "^1.229.1",
     "zod": "catalog:"
   },
   "devDependencies": {

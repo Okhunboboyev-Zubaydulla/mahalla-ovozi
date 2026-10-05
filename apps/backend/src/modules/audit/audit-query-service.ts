@@ -514,12 +514,12 @@ export class AuditQueryService {
           break;
         case 'TELEGRAM_INTEGRATION':
           conditions.push(
-            sql`(${auditEvents.action} LIKE 'DISTRICT_TELEGRAM_BOT_%' OR ${auditEvents.action} LIKE 'DISTRICT_GROUP_%')`,
+            sql`(${auditEvents.action} LIKE 'DISTRICT_TELEGRAM_BOT_%' OR ${auditEvents.action} LIKE 'DISTRICT_GROUP_%' OR ${auditEvents.action} LIKE 'USERBOT_SESSION_%')`,
           );
           break;
         case 'OPERATIONAL_LIFECYCLE':
           conditions.push(
-            sql`(${auditEvents.action} LIKE 'OPERATIONAL_%' OR (${auditEvents.action} NOT LIKE 'AUTH_%' AND ${auditEvents.action} NOT LIKE 'ACCOUNT_%' AND ${auditEvents.action} NOT LIKE 'DISTRICT_%'))`,
+            sql`(${auditEvents.action} LIKE 'OPERATIONAL_%' OR (${auditEvents.action} NOT LIKE 'AUTH_%' AND ${auditEvents.action} NOT LIKE 'ACCOUNT_%' AND ${auditEvents.action} NOT LIKE 'DISTRICT_%' AND ${auditEvents.action} NOT LIKE 'USERBOT_SESSION_%'))`,
           );
           break;
       }
@@ -538,6 +538,7 @@ export class AuditQueryService {
         COALESCE(${auditEvents.metadata}->>'outcome', '') = 'FAILURE' OR
         COALESCE(${auditEvents.metadata}->>'status', '') = 'FAILED' OR
         COALESCE(${auditEvents.metadata}->>'success', '') = 'false' OR
+        COALESCE(${auditEvents.metadata}->>'revocationSuccess', '') = 'false' OR
         ${auditEvents.action} LIKE '%_FAILED' OR
         ${auditEvents.action} LIKE '%_FAILURE'
       )`;

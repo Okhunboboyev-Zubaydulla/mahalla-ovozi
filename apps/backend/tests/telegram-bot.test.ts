@@ -209,6 +209,7 @@ describe('Telegram Bot Domain Module & Integration Tests', () => {
         encryptedToken: storedBot!.encryptedToken,
         tokenIv: storedBot!.tokenIv,
         tokenTag: storedBot!.tokenTag,
+        tokenKeyVersion: storedBot!.tokenKeyVersion,
       });
       expect(decrypted).toBe(initialToken);
 
@@ -351,6 +352,7 @@ describe('Telegram Bot Domain Module & Integration Tests', () => {
         encryptedToken: updatedBot!.encryptedToken,
         tokenIv: updatedBot!.tokenIv,
         tokenTag: updatedBot!.tokenTag,
+        tokenKeyVersion: updatedBot!.tokenKeyVersion,
       });
       expect(decrypted).toBe(replacementToken);
     });

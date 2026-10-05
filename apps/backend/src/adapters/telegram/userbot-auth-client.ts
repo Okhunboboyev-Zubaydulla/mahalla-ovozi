@@ -15,6 +15,10 @@ import {
   InvalidPhoneCodeError,
   Invalid2FAPasswordError,
 } from '../../modules/userbot-session/userbot-auth-port.js';
+import {
+  loadTelegramLibrary,
+  DEFAULT_TELEGRAM_LIBRARY_SPECIFIER,
+} from './telegram-library-loader.js';
 
 export type {
   UserbotAuthClientPort,
@@ -35,8 +39,22 @@ interface GramJsClientStub {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   sendCode(params: { apiId: number; apiHash: string }, phoneNumber: string): Promise<{ phoneCodeHash: string; isCodeViaApp?: boolean }>;
-  signInUser(params: { apiId: number; apiHash: string }, auth: { phoneNumber: string; phoneCodeHash: string; phoneCode: string }): Promise<unknown>;
-  signInWithPassword(params: { apiId: number; apiHash: string }, auth: { password: string }): Promise<unknown>;
+  signInUser(
+    params: { apiId: number; apiHash: string },
+    auth: {
+      phoneNumber: string;
+      phoneCodeHash?: string;
+      phoneCode: string | ((isCodeViaApp?: boolean) => Promise<string>);
+      onError?: (err: unknown) => Promise<boolean> | void;
+    },
+  ): Promise<unknown>;
+  signInWithPassword(
+    params: { apiId: number; apiHash: string },
+    auth: {
+      password: string | ((hint?: string) => Promise<string>);
+      onError?: (err: unknown) => Promise<boolean> | void;
+    },
+  ): Promise<unknown>;
   session: {
     save(): string;
   };
@@ -52,22 +70,11 @@ export class GramJsUserbotAuthClient implements UserbotAuthClientPort {
   private currentApiHash: string | null = null;
 
   private async loadGramJs(): Promise<{
-    TelegramClient: new (session: unknown, apiId: number, apiHash: string, options: unknown) => GramJsClientStub;
+    TelegramClient: new (session: unknown, apiId: number, apiHash: string, options: Record<string, unknown>) => GramJsClientStub;
     StringSession: new (session: string) => unknown;
   }> {
     try {
-      // Dynamic import to allow pure isolation and testability when external library is optional
-      const modName = 'telegram';
-      const telegramMod = await import(modName) as {
-        TelegramClient: new (session: unknown, apiId: number, apiHash: string, options: unknown) => GramJsClientStub;
-      };
-      const sessionMod = await import('telegram/sessions/index.js' as string) as {
-        StringSession: new (session: string) => unknown;
-      };
-      return {
-        TelegramClient: telegramMod.TelegramClient,
-        StringSession: sessionMod.StringSession,
-      };
+      return await loadTelegramLibrary<GramJsClientStub>(DEFAULT_TELEGRAM_LIBRARY_SPECIFIER);
     } catch {
       throw new UserbotAuthError(
         'GramJS (telegram) client library is not installed in the environment. Please ensure telegram is installed on the host to execute live MTProto authentication.',
@@ -123,7 +130,10 @@ export class GramJsUserbotAuthClient implements UserbotAuthClientPort {
         {
           phoneNumber: params.phoneNumber,
           phoneCodeHash: params.phoneCodeHash,
-          phoneCode: params.phoneCode,
+          phoneCode: typeof params.phoneCode === 'function' ? params.phoneCode : async () => params.phoneCode,
+          onError: (err: unknown) => {
+            throw err;
+          },
         },
       );
 
@@ -132,7 +142,7 @@ export class GramJsUserbotAuthClient implements UserbotAuthClientPort {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
 
-      if (msg.includes('SESSION_PASSWORD_NEEDED')) {
+      if (msg.includes('SESSION_PASSWORD_NEEDED') || msg.includes('2FA enabled')) {
         return { requiresPassword: true };
       }
       if (msg.includes('PHONE_CODE_INVALID') || msg.includes('PHONE_CODE_EXPIRED')) {
@@ -157,7 +167,10 @@ export class GramJsUserbotAuthClient implements UserbotAuthClientPort {
           apiHash: this.currentApiHash,
         },
         {
-          password: params.password,
+          password: typeof params.password === 'function' ? params.password : async () => params.password,
+          onError: (err: unknown) => {
+            throw err;
+          },
         },
       );
 

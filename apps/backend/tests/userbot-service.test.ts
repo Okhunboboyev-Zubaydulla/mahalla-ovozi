@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import pg from 'pg';
 import crypto from 'node:crypto';
 import { eq, and } from 'drizzle-orm';
@@ -11,7 +11,7 @@ import {
 } from '../src/adapters/db/schema/index.js';
 import {
   createDistrictUserbotSession,
-  updateUserbotSessionStatus,
+  enableDistrictUserbotSession,
   disableDistrictUserbotSession,
   getDistrictUserbotSession,
 } from '../src/modules/userbot-session/index.js';
@@ -23,6 +23,12 @@ import {
   type _AssertPassiveOnlyPort,
 } from '../src/modules/userbot/index.js';
 import { GramJsUserbotClient } from '../src/adapters/telegram/userbot-client-adapter.js';
+import { logger } from '../src/utils/logger.js';
+import {
+  describeUserbotRuntimeComposition,
+  assertUserbotRuntimeComposition,
+  UserbotRuntimeCompositionError,
+} from '../src/modules/userbot/userbot-runtime-composition.js';
 
 
 class MockUserbotClient implements UserbotClientPort {
@@ -40,6 +46,7 @@ class MockUserbotClient implements UserbotClientPort {
     reconnect: [] as (() => void)[],
     error: [] as ((err: Error) => void)[],
     ban: [] as ((details?: { reason?: string; error?: Error }) => void)[],
+    gap: [] as ((details?: { reason?: string; lastKnownPosition?: string | null; error?: Error }) => void)[],
   };
 
   constructor(params: {
@@ -167,6 +174,11 @@ class MockUserbotClient implements UserbotClientPort {
   simulateAbnormalSignal(signalType: string): void {
     this.emit('error', new Error(signalType));
   }
+
+  simulateAccountDeleted(error?: Error): void {
+    this.connected = false;
+    this.emit('error', error ?? new Error('USER_DEACTIVATED'));
+  }
 }
 
 
@@ -242,7 +254,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '1110001',
       sessionString: `session_active_${crypto.randomUUID()}`,
     });
-    await updateUserbotSessionStatus(db, activeDist, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, activeDist);
 
     // Pending session (default status is PENDING)
     await createDistrictUserbotSession(db, {
@@ -259,7 +271,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '1110003',
       sessionString: `session_disabled_${crypto.randomUUID()}`,
     });
-    await updateUserbotSessionStatus(db, disabledDist, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, disabledDist);
     await disableDistrictUserbotSession(db, disabledDist);
 
     // Banned session
@@ -269,7 +281,8 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '1110004',
       sessionString: `session_banned_${crypto.randomUUID()}`,
     });
-    await updateUserbotSessionStatus(db, bannedDist, { status: 'BANNED' });
+    const banMgr = new UserbotConnectionManager({ db });
+    await banMgr.handleBan(bannedDist, new Error('PHONE_NUMBER_BANNED'));
 
     // 2. Start connection manager
     const manager = new UserbotConnectionManager({
@@ -311,7 +324,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '2220001',
       sessionString: 'session_reconnect_token',
     });
-    await updateUserbotSessionStatus(db, districtId, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, districtId);
 
     const manager = new UserbotConnectionManager({
       db,
@@ -352,7 +365,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
     });
     expect(created.lastSeenAt).toBeNull();
 
-    await updateUserbotSessionStatus(db, districtId, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, districtId);
 
     const manager = new UserbotConnectionManager({
       db,
@@ -385,7 +398,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '4440001',
       sessionString: 'session_ban_token',
     });
-    await updateUserbotSessionStatus(db, districtId, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, districtId);
 
     const manager = new UserbotConnectionManager({
       db,
@@ -472,7 +485,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '5550001',
       sessionString: 'session_shutdown_1',
     });
-    await updateUserbotSessionStatus(db, dist1, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, dist1);
 
     await createDistrictUserbotSession(db, {
       districtId: dist2,
@@ -480,7 +493,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '5550002',
       sessionString: 'session_shutdown_2',
     });
-    await updateUserbotSessionStatus(db, dist2, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, dist2);
 
     const manager = new UserbotConnectionManager({
       db,
@@ -562,7 +575,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '6660001',
       sessionString: 'session_auth_key_dup_token',
     });
-    await updateUserbotSessionStatus(db, districtId, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, districtId);
 
     const manager = new UserbotConnectionManager({
       db,
@@ -645,7 +658,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '7770001',
       sessionString: 'session_flood_wait_token',
     });
-    await updateUserbotSessionStatus(db, districtId, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, districtId);
 
     const manager = new UserbotConnectionManager({
       db,
@@ -722,7 +735,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '8880001',
       sessionString: sharedSessionString,
     });
-    await updateUserbotSessionStatus(db, dist1, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, dist1);
 
     await createDistrictUserbotSession(db, {
       districtId: dist2,
@@ -730,7 +743,7 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       apiId: '8880002',
       sessionString: sharedSessionString,
     });
-    await updateUserbotSessionStatus(db, dist2, { status: 'ACTIVE' });
+    await enableDistrictUserbotSession(db, dist2);
 
     const manager = new UserbotConnectionManager({
       db,
@@ -766,6 +779,8 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       }
       async connect(): Promise<void> {}
       async disconnect(): Promise<void> {}
+      addEventHandler(_callback: (update: unknown) => void, _event: unknown): void {}
+      removeEventHandler(_callback: (update: unknown) => void, _event: unknown): void {}
     }
 
     class MockStringSession {
@@ -773,6 +788,10 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       constructor(session: string) {
         this.session = session;
       }
+    }
+
+    class MockRawUpdateEvent {
+      constructor(_params: Record<string, unknown>) {}
     }
 
     const client = new GramJsUserbotClient({
@@ -786,13 +805,14 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
     (client as unknown as { loadGramJs: () => Promise<unknown> }).loadGramJs = async () => ({
       TelegramClient: MockTelegramClient,
       StringSession: MockStringSession,
+      RawUpdateEvent: MockRawUpdateEvent,
     });
 
     await client.connect();
 
     expect(capturedOptions).toEqual({
       connectionRetries: 5,
-      catchUp: false,
+      catchUp: true,
     });
     expect(client.isConnected()).toBe(true);
 
@@ -803,6 +823,814 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
   it('Test 11: _AssertPassiveOnlyPort active compile-time guard resolves to true and validates port has no write methods (Ticket 18)', () => {
     const isPassiveOnly: _AssertPassiveOnlyPort = true;
     expect(isPassiveOnly).toBe(true);
+  });
+
+  describe('Ticket 08: Liveness and connection health criteria', () => {
+    it('Criteria 1, 2, 3: last_seen_at advances only while genuinely connected, refreshes on timer, and freezes when disconnected', async () => {
+      const districtId = await createTestDistrict('LivenessTimerTest');
+
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901080001',
+        apiId: '1080001',
+        sessionString: 'session_liveness_timer_token',
+      });
+      await enableDistrictUserbotSession(db, districtId);
+
+      // Start manager with 50ms liveness refresh timer and 2000ms reconnect delay
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        reconnectBaseDelayMs: 2000,
+        lastSeenIntervalMs: 50,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      const client = createdClients.get(districtId);
+      expect(client).toBeDefined();
+      expect(client!.isConnected()).toBe(true);
+
+      // Initial connection sets lastSeenAt
+      await waitFor(async () => {
+        const s = await getDistrictUserbotSession(db, districtId);
+        return Boolean(s?.lastSeenAt);
+      }, 2000, 20);
+
+      const firstSeen = (await getDistrictUserbotSession(db, districtId))!.lastSeenAt!;
+
+      // 1 & 2: Liveness is refreshed on timer while genuinely connected
+      await waitFor(async () => {
+        const s = await getDistrictUserbotSession(db, districtId);
+        return Boolean(s?.lastSeenAt && s.lastSeenAt.getTime() > firstSeen.getTime());
+      }, 2000, 20);
+
+      const advancedSeen = (await getDistrictUserbotSession(db, districtId))!.lastSeenAt!;
+      expect(advancedSeen.getTime()).toBeGreaterThan(firstSeen.getTime());
+
+      // 3: When disconnected, last_seen_at does not advance
+      client!.simulateDrop(new Error('Simulated drop for liveness freeze check'));
+      expect(client!.isConnected()).toBe(false);
+
+      const disconnectedSeen = (await getDistrictUserbotSession(db, districtId))!.lastSeenAt!;
+
+      // Wait 120ms with timer running while disconnected
+      await new Promise((resolve) => setTimeout(resolve, 120));
+
+      const afterWaitSeen = (await getDistrictUserbotSession(db, districtId))!.lastSeenAt!;
+      expect(afterWaitSeen.getTime()).toBe(disconnectedSeen.getTime());
+
+      // Even manual refreshLastSeen() does not advance last_seen_at for a disconnected session
+      await manager.refreshLastSeen();
+      const afterManualRefresh = (await getDistrictUserbotSession(db, districtId))!.lastSeenAt!;
+      expect(afterManualRefresh.getTime()).toBe(disconnectedSeen.getTime());
+
+      await manager.stop();
+    });
+
+    it('Criterion 4: The number of inbound updates received per session is observable', async () => {
+      const districtId = await createTestDistrict('InboundObservableTest');
+
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901080002',
+        apiId: '1080002',
+        sessionString: 'session_inbound_observable_token',
+      });
+      await enableDistrictUserbotSession(db, districtId);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      // Initially zero
+      expect(await manager.getInboundUpdateCount(districtId)).toBe(0);
+      const initialSession = await getDistrictUserbotSession(db, districtId);
+      expect(initialSession?.inboundUpdateCounter).toBe(0);
+
+      const initialHealth = await manager.checkSessionHealth(districtId);
+      expect(initialHealth.inboundUpdateCounter).toBe(0);
+
+      // Record 3 incoming updates
+      await manager.recordInboundUpdate(districtId);
+      await manager.recordInboundUpdate(districtId);
+      await manager.recordInboundUpdate(districtId);
+
+      // Observable across all boundaries
+      expect(await manager.getInboundUpdateCount(districtId)).toBe(3);
+
+      const updatedSession = await getDistrictUserbotSession(db, districtId);
+      expect(updatedSession?.inboundUpdateCounter).toBe(3);
+
+      const updatedHealth = await manager.checkSessionHealth(districtId);
+      expect(updatedHealth.inboundUpdateCounter).toBe(3);
+
+      await manager.stop();
+    });
+
+    it('Criterion 5: ACTIVE session that received nothing for an implausibly long period is flagged rather than passing as healthy', async () => {
+      const districtId = await createTestDistrict('StaleSessionTest');
+
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901080003',
+        apiId: '1080003',
+        sessionString: 'session_stale_flagging_token',
+      });
+      await enableDistrictUserbotSession(db, districtId);
+
+      // Configure a very short staleThresholdMs (40ms) for testing
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+        staleThresholdMs: 40,
+      });
+
+      await manager.start();
+
+      // Immediately after start, session is healthy
+      const initialHealth = await manager.checkSessionHealth(districtId);
+      expect(initialHealth.isHealthy).toBe(true);
+      expect(initialHealth.isConnected).toBe(true);
+      expect(initialHealth.isStale).toBe(false);
+      expect(initialHealth.status).toBe('ACTIVE');
+
+      // Wait beyond the 40ms staleness threshold
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      // Check health now: must be flagged as STALE rather than passing as healthy
+      const staleHealth = await manager.checkSessionHealth(districtId);
+      expect(staleHealth.isHealthy).toBe(false);
+      expect(staleHealth.isConnected).toBe(true);
+      expect(staleHealth.isStale).toBe(true);
+      expect(staleHealth.status).toBe('STALE');
+      expect(staleHealth.reason).toContain('implausibly long period');
+
+      // Assert DB row isStale flag is set to true
+      const dbSession = await getDistrictUserbotSession(db, districtId);
+      expect(dbSession?.isStale).toBe(true);
+
+      // Assert District-scoped Operational Issue was created with severity Warning, status ACTIVE
+      const [issue] = await db
+        .select()
+        .from(operationalIssues)
+        .where(
+          and(
+            eq(operationalIssues.districtId, districtId),
+            eq(operationalIssues.component, 'USERBOT'),
+            eq(operationalIssues.issueCategory, 'USERBOT_STALE'),
+            eq(operationalIssues.status, 'ACTIVE'),
+          ),
+        );
+      expect(issue).toBeDefined();
+      expect(issue!.scope).toBe('DISTRICT');
+      expect(issue!.severity).toBe('Warning');
+      expect(issue!.healthStatus).toBe('Degraded');
+
+      // When inbound update finally arrives, staleness is resolved
+      await manager.recordInboundUpdate(districtId);
+
+      const recoveredHealth = await manager.checkSessionHealth(districtId);
+      expect(recoveredHealth.isHealthy).toBe(true);
+      expect(recoveredHealth.isStale).toBe(false);
+      expect(recoveredHealth.status).toBe('ACTIVE');
+
+      const recoveredSession = await getDistrictUserbotSession(db, districtId);
+      expect(recoveredSession?.isStale).toBe(false);
+
+      const [resolvedIssue] = await db
+        .select()
+        .from(operationalIssues)
+        .where(
+          and(
+            eq(operationalIssues.districtId, districtId),
+            eq(operationalIssues.logicalKey, `DISTRICT:${districtId}:USERBOT:STALE_INACTIVITY`),
+          ),
+        );
+      expect(resolvedIssue?.status).toBe('RESOLVED');
+
+      await manager.stop();
+    });
+
+    it('Criterion 6: A session that is not ACTIVE is never reported as connected', async () => {
+      const pendingDist = await createTestDistrict('NotActivePending');
+      const disabledDist = await createTestDistrict('NotActiveDisabled');
+      const bannedDist = await createTestDistrict('NotActiveBanned');
+      const nonexistentDist = `dist_nonexistent_${crypto.randomUUID()}`;
+
+      // PENDING
+      await createDistrictUserbotSession(db, {
+        districtId: pendingDist,
+        phoneNumber: '+998901080004',
+        apiId: '1080004',
+        sessionString: 'session_pending_test',
+      });
+
+      // DISABLED
+      await createDistrictUserbotSession(db, {
+        districtId: disabledDist,
+        phoneNumber: '+998901080005',
+        apiId: '1080005',
+        sessionString: 'session_disabled_test',
+      });
+      await enableDistrictUserbotSession(db, disabledDist);
+      await disableDistrictUserbotSession(db, disabledDist);
+
+      // BANNED
+      await createDistrictUserbotSession(db, {
+        districtId: bannedDist,
+        phoneNumber: '+998901080006',
+        apiId: '1080006',
+        sessionString: 'session_banned_test',
+      });
+      const banMgr = new UserbotConnectionManager({ db });
+      await banMgr.handleBan(bannedDist, new Error('PHONE_NUMBER_BANNED'));
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      // None of the non-ACTIVE sessions must be reported as connected
+      expect(manager.isDistrictConnected(pendingDist)).toBe(false);
+      expect(manager.isDistrictConnected(disabledDist)).toBe(false);
+      expect(manager.isDistrictConnected(bannedDist)).toBe(false);
+      expect(manager.isDistrictConnected(nonexistentDist)).toBe(false);
+
+      const connectedList = manager.getConnectedDistricts();
+      expect(connectedList).not.toContain(pendingDist);
+      expect(connectedList).not.toContain(disabledDist);
+      expect(connectedList).not.toContain(bannedDist);
+      expect(connectedList).not.toContain(nonexistentDist);
+
+      const pendingHealth = await manager.checkSessionHealth(pendingDist);
+      expect(pendingHealth.isConnected).toBe(false);
+      expect(pendingHealth.isHealthy).toBe(false);
+      expect(pendingHealth.status).toBe('PENDING');
+
+      const disabledHealth = await manager.checkSessionHealth(disabledDist);
+      expect(disabledHealth.isConnected).toBe(false);
+      expect(disabledHealth.isHealthy).toBe(false);
+      expect(disabledHealth.status).toBe('DISABLED');
+
+      const bannedHealth = await manager.checkSessionHealth(bannedDist);
+      expect(bannedHealth.isConnected).toBe(false);
+      expect(bannedHealth.isHealthy).toBe(false);
+      expect(bannedHealth.status).toBe('BANNED');
+
+      const nonexistentHealth = await manager.checkSessionHealth(nonexistentDist);
+      expect(nonexistentHealth.isConnected).toBe(false);
+      expect(nonexistentHealth.isHealthy).toBe(false);
+      expect(nonexistentHealth.status).toBe('NOT_FOUND');
+
+      await manager.stop();
+    });
+
+    it('Criterion 7: When account has been deleted on Telegram, session surfaces as PENDING rather than remaining ACTIVE', async () => {
+      const districtId = await createTestDistrict('AccountDeletedLifecycle');
+
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901080007',
+        apiId: '1080007',
+        sessionString: 'session_account_deleted_token',
+      });
+      await enableDistrictUserbotSession(db, districtId);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        reconnectBaseDelayMs: 20,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      const client = createdClients.get(districtId)!;
+      expect(client).toBeDefined();
+      expect(client.isConnected()).toBe(true);
+
+      // Simulate Telegram account deleted error event (USER_DEACTIVATED)
+      client.simulateAccountDeleted(new Error('USER_DEACTIVATED'));
+
+      // Wait for DB session status to transition to PENDING
+      await waitFor(async () => {
+        const s = await getDistrictUserbotSession(db, districtId);
+        return s?.status === 'PENDING';
+      }, 2000, 20);
+
+      // 1. Assert status surfaced as PENDING rather than remaining ACTIVE
+      const sessionInDb = await getDistrictUserbotSession(db, districtId);
+      expect(sessionInDb?.status).toBe('PENDING');
+      expect(sessionInDb?.hasSession).toBe(false);
+
+      // 2. Assert stored secrets are wiped
+      const [rawRow] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      expect(rawRow?.status).toBe('PENDING');
+      expect(rawRow?.sessionEncrypted).toBeNull();
+      expect(rawRow?.sessionIv).toBeNull();
+      expect(rawRow?.sessionTag).toBeNull();
+
+      // 3. Assert audit event emitted with previousStatus: ACTIVE and newStatus: PENDING
+      const audits = await db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+            eq(auditEvents.districtId, districtId),
+            eq(auditEvents.action, 'USERBOT_SESSION_STATUS_UPDATED'),
+          ),
+        );
+      const audit = audits.find(
+        (a) => (a.metadata as { reason?: string } | null)?.reason === 'ACCOUNT_DELETED',
+      );
+      expect(audit).toBeDefined();
+      expect(audit!.metadata).toMatchObject({
+        previousStatus: 'ACTIVE',
+        newStatus: 'PENDING',
+        reason: 'ACCOUNT_DELETED',
+      });
+
+      // 4. Assert active Operational Issue created
+      const [issue] = await db
+        .select()
+        .from(operationalIssues)
+        .where(
+          and(
+            eq(operationalIssues.districtId, districtId),
+            eq(operationalIssues.component, 'USERBOT'),
+            eq(operationalIssues.issueCategory, 'ACCOUNT_DELETED'),
+            eq(operationalIssues.status, 'ACTIVE'),
+          ),
+        );
+      expect(issue).toBeDefined();
+      expect(issue!.scope).toBe('DISTRICT');
+      expect(issue!.severity).toBe('Critical');
+      expect(issue!.healthStatus).toBe('Unavailable');
+
+      // 5. Assert manager marks district as account deleted and halts reconnection
+      expect(manager.isDistrictAccountDeleted(districtId)).toBe(true);
+      expect(manager.isDistrictConnected(districtId)).toBe(false);
+
+      const health = await manager.checkSessionHealth(districtId);
+      expect(health.isConnected).toBe(false);
+      expect(health.status).toBe('PENDING');
+
+      // Ensure no further reconnection calls are made
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(client.connectCalls).toBe(1);
+
+      await manager.stop();
+    });
+
+    it('Criterion 8: The session last successful connection time is visible and preserved across drops', async () => {
+      const activeDist = await createTestDistrict('LastSuccessfulConnActive');
+      const pendingDist = await createTestDistrict('LastSuccessfulConnPending');
+
+      // Pending session has never connected
+      await createDistrictUserbotSession(db, {
+        districtId: pendingDist,
+        phoneNumber: '+998901080008',
+        apiId: '1080008',
+      });
+
+      // Active session
+      await createDistrictUserbotSession(db, {
+        districtId: activeDist,
+        phoneNumber: '+998901080009',
+        apiId: '1080009',
+        sessionString: 'session_last_successful_conn_token',
+      });
+      await enableDistrictUserbotSession(db, activeDist);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      // Pending session before any connection
+      expect(await manager.getLastSuccessfulConnectionAt(pendingDist)).toBeNull();
+      const pendingPublic = await getDistrictUserbotSession(db, pendingDist);
+      expect(pendingPublic?.lastSuccessfulConnectionAt).toBeNull();
+
+      const beforeConnect = new Date(Date.now() - 1000);
+      await manager.start();
+
+      // Active session connected
+      const connectedAt = await manager.getLastSuccessfulConnectionAt(activeDist);
+      expect(connectedAt).toBeInstanceOf(Date);
+      expect(connectedAt!.getTime()).toBeGreaterThanOrEqual(beforeConnect.getTime());
+
+      // Visible on public session record
+      const activePublic = await getDistrictUserbotSession(db, activeDist);
+      expect(activePublic?.lastSuccessfulConnectionAt).toEqual(connectedAt);
+
+      // Visible on checkSessionHealth
+      const activeHealth = await manager.checkSessionHealth(activeDist);
+      expect(activeHealth.lastSuccessfulConnectionAt).toEqual(connectedAt);
+
+      // When client drops, lastSuccessfulConnectionAt is PRESERVED (does not reset to null)
+      const client = createdClients.get(activeDist)!;
+      client.simulateDrop(new Error('Connection dropped'));
+
+      expect(await manager.getLastSuccessfulConnectionAt(activeDist)).toEqual(connectedAt);
+      const droppedPublic = await getDistrictUserbotSession(db, activeDist);
+      expect(droppedPublic?.lastSuccessfulConnectionAt).toEqual(connectedAt);
+
+      const droppedHealth = await manager.checkSessionHealth(activeDist);
+      expect(droppedHealth.lastSuccessfulConnectionAt).toEqual(connectedAt);
+
+      await manager.stop();
+    });
+
+    it('Criterion 9: The runtime logs its startup composition, stating whether its database pool and job-queue client were constructed', async () => {
+      const infoSpy = vi.spyOn(logger, 'info');
+
+      const mockPool = {} as pg.Pool;
+      const mockBoss = {} as any;
+
+      const manager = new UserbotConnectionManager({
+        db,
+        pool: mockPool,
+        boss: mockBoss,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      // Assert runtime logged its startup composition stating whether database pool and job-queue client were constructed
+      expect(infoSpy).toHaveBeenCalledWith(
+        {
+          hasDatabasePool: true,
+          hasJobQueueClient: true,
+        },
+        'Userbot runtime composition: database pool and job-queue client status',
+      );
+
+      // Assert helper functions behavior
+      expect(describeUserbotRuntimeComposition({ pool: mockPool, boss: mockBoss })).toEqual({
+        hasPool: true,
+        hasJobQueueClient: true,
+      });
+      expect(describeUserbotRuntimeComposition({ pool: mockPool, boss: null })).toEqual({
+        hasPool: true,
+        hasJobQueueClient: false,
+      });
+      expect(describeUserbotRuntimeComposition({ pool: null, boss: mockBoss })).toEqual({
+        hasPool: false,
+        hasJobQueueClient: true,
+      });
+
+      // Fail-fast assertion
+      expect(() => assertUserbotRuntimeComposition({ pool: null, boss: mockBoss })).toThrow(
+        UserbotRuntimeCompositionError,
+      );
+      expect(() => assertUserbotRuntimeComposition({ pool: mockPool, boss: null })).toThrow(
+        UserbotRuntimeCompositionError,
+      );
+      expect(() => assertUserbotRuntimeComposition({ pool: null, boss: null })).toThrow(
+        UserbotRuntimeCompositionError,
+      );
+      expect(() => assertUserbotRuntimeComposition({ pool: mockPool, boss: mockBoss })).not.toThrow();
+
+      await manager.stop();
+      infoSpy.mockRestore();
+    });
+
+    it('Criterion 10: The runtime shuts down cleanly on termination signals, and after shutdown does not leave a session reported as connected', async () => {
+      const dist1 = await createTestDistrict('ShutdownClean1');
+      const dist2 = await createTestDistrict('ShutdownClean2');
+
+      await createDistrictUserbotSession(db, {
+        districtId: dist1,
+        phoneNumber: '+998901080010',
+        apiId: '1080010',
+        sessionString: 'session_shutdown_clean_1',
+      });
+      await enableDistrictUserbotSession(db, dist1);
+
+      await createDistrictUserbotSession(db, {
+        districtId: dist2,
+        phoneNumber: '+998901080011',
+        apiId: '1080011',
+        sessionString: 'session_shutdown_clean_2',
+      });
+      await enableDistrictUserbotSession(db, dist2);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      expect(manager.isDistrictConnected(dist1)).toBe(true);
+      expect(manager.isDistrictConnected(dist2)).toBe(true);
+      expect(manager.getConnectedDistricts()).toContain(dist1);
+      expect(manager.getConnectedDistricts()).toContain(dist2);
+
+      const client1 = createdClients.get(dist1)!;
+      const client2 = createdClients.get(dist2)!;
+      expect(client1.isConnected()).toBe(true);
+      expect(client2.isConnected()).toBe(true);
+
+      // Execute shutdown
+      await manager.stop();
+
+      // After shutdown, both clients are disconnected
+      expect(client1.isConnected()).toBe(false);
+      expect(client2.isConnected()).toBe(false);
+
+      // After shutdown, NO session is reported as connected
+      expect(manager.getConnectedDistricts()).toEqual([]);
+      expect(manager.isDistrictConnected(dist1)).toBe(false);
+      expect(manager.isDistrictConnected(dist2)).toBe(false);
+
+      const health1 = await manager.checkSessionHealth(dist1);
+      const health2 = await manager.checkSessionHealth(dist2);
+      expect(health1.isConnected).toBe(false);
+      expect(health2.isConnected).toBe(false);
+
+      // Persistence is preserved (status remains ACTIVE, not deleted)
+      expect((await getDistrictUserbotSession(db, dist1))?.status).toBe('ACTIVE');
+      expect((await getDistrictUserbotSession(db, dist2))?.status).toBe('ACTIVE');
+
+      // Idempotent stop
+      await expect(manager.stop()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('Ticket 16: Per-District isolation of sessions, fault domains, and district deletion', () => {
+    it('AC-5: Multi-district transport fault isolation: District A connection drop leaves District B connected and healthy', async () => {
+      const distA = await createTestDistrict('FaultIsoA');
+      const distB = await createTestDistrict('FaultIsoB');
+
+      await createDistrictUserbotSession(db, {
+        districtId: distA,
+        phoneNumber: '+998901160001',
+        apiId: '1160001',
+        sessionString: 'session_fault_iso_a',
+      });
+      await enableDistrictUserbotSession(db, distA);
+
+      await createDistrictUserbotSession(db, {
+        districtId: distB,
+        phoneNumber: '+998901160002',
+        apiId: '1160002',
+        sessionString: 'session_fault_iso_b',
+      });
+      await enableDistrictUserbotSession(db, distB);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      expect(manager.isDistrictConnected(distA)).toBe(true);
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+
+      const clientA = createdClients.get(distA)!;
+      const clientB = createdClients.get(distB)!;
+      expect(clientA.isConnected()).toBe(true);
+      expect(clientB.isConnected()).toBe(true);
+
+      // District A experiences a transport fault (simulated drop/error)
+      clientA.simulateDrop(new Error('Connection reset by peer'));
+
+      // District A is marked disconnected
+      expect(manager.isDistrictConnected(distA)).toBe(false);
+      expect(clientA.isConnected()).toBe(false);
+
+      // District B remains connected, unaffected and healthy
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+      expect(clientB.isConnected()).toBe(true);
+
+      const healthB = await manager.checkSessionHealth(distB);
+      expect(healthB.isConnected).toBe(true);
+      expect(healthB.isHealthy).toBe(true);
+
+      await manager.stop();
+    });
+
+    it('AC-6: Abnormal signal isolation: District A FLOOD_WAIT creates issue strictly on District A; District B remains unaffected', async () => {
+      const distA = await createTestDistrict('SignalIsoA');
+      const distB = await createTestDistrict('SignalIsoB');
+
+      await createDistrictUserbotSession(db, {
+        districtId: distA,
+        phoneNumber: '+998901160003',
+        apiId: '1160003',
+        sessionString: 'session_signal_iso_a',
+      });
+      await enableDistrictUserbotSession(db, distA);
+
+      await createDistrictUserbotSession(db, {
+        districtId: distB,
+        phoneNumber: '+998901160004',
+        apiId: '1160004',
+        sessionString: 'session_signal_iso_b',
+      });
+      await enableDistrictUserbotSession(db, distB);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      const clientA = createdClients.get(distA)!;
+      const clientB = createdClients.get(distB)!;
+      expect(manager.isDistrictConnected(distA)).toBe(true);
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+
+      // District A encounters FLOOD_WAIT_120
+      clientA.simulateFloodWait(120);
+
+      // Wait for issue creation for District A
+      await waitFor(async () => {
+        const issuesA = await db
+          .select()
+          .from(operationalIssues)
+          .where(
+            and(
+              eq(operationalIssues.districtId, distA),
+              eq(operationalIssues.component, 'USERBOT'),
+              eq(operationalIssues.issueCategory, 'FLOOD_WAIT'),
+              eq(operationalIssues.status, 'ACTIVE'),
+            ),
+          );
+        return issuesA.length > 0;
+      }, 5000, 100);
+
+      const issuesA = await db
+        .select()
+        .from(operationalIssues)
+        .where(eq(operationalIssues.districtId, distA));
+      expect(issuesA.length).toBeGreaterThanOrEqual(1);
+      expect(issuesA[0].logicalKey).toBe(`DISTRICT:${distA}:USERBOT:FLOOD_WAIT`);
+
+      // District B has ZERO operational issues
+      const issuesB = await db
+        .select()
+        .from(operationalIssues)
+        .where(eq(operationalIssues.districtId, distB));
+      expect(issuesB.length).toBe(0);
+
+      // District B client and connection state remain active and healthy
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+      expect(clientB.isConnected()).toBe(true);
+      const healthB = await manager.checkSessionHealth(distB);
+      expect(healthB.isConnected).toBe(true);
+      expect(healthB.isHealthy).toBe(true);
+
+      await manager.stop();
+    });
+
+    it('AC-7: Subscription ineligibility: When district status becomes non-active/ineligible, syncSessions() disconnects District A while District B remains connected', async () => {
+      const distA = await createTestDistrict('IneligibleA');
+      const distB = await createTestDistrict('EligibleB');
+
+      await createDistrictUserbotSession(db, {
+        districtId: distA,
+        phoneNumber: '+998901160005',
+        apiId: '1160005',
+        sessionString: 'session_ineligible_a',
+      });
+      await enableDistrictUserbotSession(db, distA);
+
+      await createDistrictUserbotSession(db, {
+        districtId: distB,
+        phoneNumber: '+998901160006',
+        apiId: '1160006',
+        sessionString: 'session_eligible_b',
+      });
+      await enableDistrictUserbotSession(db, distB);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      expect(manager.isDistrictConnected(distA)).toBe(true);
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+
+      const clientA = createdClients.get(distA)!;
+      const clientB = createdClients.get(distB)!;
+      expect(clientA.isConnected()).toBe(true);
+      expect(clientB.isConnected()).toBe(true);
+
+      // District A subscription lapses: status -> SUSPENDED, accessEligible -> false
+      await db
+        .update(districts)
+        .set({ status: 'SUSPENDED', accessEligible: false })
+        .where(eq(districts.id, distA));
+
+      // Trigger syncSessions
+      await manager.syncSessions();
+
+      // District A must be cleanly disconnected
+      expect(manager.isDistrictConnected(distA)).toBe(false);
+      expect(clientA.isConnected()).toBe(false);
+
+      // District B remains connected and healthy
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+      expect(clientB.isConnected()).toBe(true);
+
+      const healthB = await manager.checkSessionHealth(distB);
+      expect(healthB.isConnected).toBe(true);
+      expect(healthB.isHealthy).toBe(true);
+
+      await manager.stop();
+    });
+
+    it('AC-10: District deletion isolation: Deleting District A removes its connection in the manager while District B remains connected and healthy', async () => {
+      const distA = await createTestDistrict('DeleteIsoA');
+      const distB = await createTestDistrict('DeleteIsoB');
+
+      await createDistrictUserbotSession(db, {
+        districtId: distA,
+        phoneNumber: '+998901160007',
+        apiId: '1160007',
+        sessionString: 'session_delete_iso_a',
+      });
+      await enableDistrictUserbotSession(db, distA);
+
+      await createDistrictUserbotSession(db, {
+        districtId: distB,
+        phoneNumber: '+998901160008',
+        apiId: '1160008',
+        sessionString: 'session_delete_iso_b',
+      });
+      await enableDistrictUserbotSession(db, distB);
+
+      const manager = new UserbotConnectionManager({
+        db,
+        clientFactory: mockClientFactory,
+        lastSeenIntervalMs: 0,
+        pollIntervalMs: 0,
+      });
+
+      await manager.start();
+
+      expect(manager.isDistrictConnected(distA)).toBe(true);
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+
+      const clientA = createdClients.get(distA)!;
+      const clientB = createdClients.get(distB)!;
+
+      // Permanently delete District A row from districts table (DB cascade deletes its session)
+      await db.delete(districts).where(eq(districts.id, distA));
+
+      // Sync sessions
+      await manager.syncSessions();
+
+      // District A is cleanly disconnected and removed
+      expect(manager.isDistrictConnected(distA)).toBe(false);
+      expect(clientA.isConnected()).toBe(false);
+
+      // District B remains connected, healthy, and completely undisturbed
+      expect(manager.isDistrictConnected(distB)).toBe(true);
+      expect(clientB.isConnected()).toBe(true);
+
+      const healthB = await manager.checkSessionHealth(distB);
+      expect(healthB.isConnected).toBe(true);
+      expect(healthB.isHealthy).toBe(true);
+
+      await manager.stop();
+    });
   });
 });
 

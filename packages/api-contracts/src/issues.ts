@@ -44,6 +44,7 @@ export const IssueCategoryEnumSchema = z.enum([
   'BACKUP_EXPIRY_DELAY',
   'LIFECYCLE_DELETION',
   'DISASTER_RECOVERY',
+  'UNRECOVERABLE_GAP',
 ]);
 export type IssueCategory = z.infer<typeof IssueCategoryEnumSchema>;
 

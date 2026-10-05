@@ -86,7 +86,7 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
-      target: runner
+      target: userbot-runner
     container_name: mahalla-userbot
     restart: unless-stopped
     command: ["pnpm", "--filter", "@mahalla-ovozi/backend", "exec", "node", "--import", "tsx/esm", "src/entrypoints/userbot.ts"]

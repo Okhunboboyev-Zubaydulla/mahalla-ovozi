@@ -33,6 +33,7 @@ import {
   operationalIssues,
   userDashboardVisits,
   auditEvents,
+  districtTelegramUserbotSessions,
 } from '../src/adapters/db/schema/index.js';
 import {
   executeDistrictLiveDeletion,
@@ -347,6 +348,27 @@ describe('Story 6.4: Execute Permanent Live-System District Deletion Integration
       metadata: { districtName },
     });
 
+    // 18. districtTelegramUserbotSessions
+    const sessionEncrypted = encryptToken('1BJWNg...testTelegramSessionString...');
+    const apiHashEncrypted = encryptToken('0123456789abcdef0123456789abcdef');
+    await db.insert(districtTelegramUserbotSessions).values({
+      id: `dtus_${crypto.randomUUID().slice(0, 8)}`,
+      districtId,
+      phoneNumber: `+99890${Math.floor(1000000 + Math.random() * 9000000)}`,
+      apiId: '9876543',
+      apiHashEncrypted: apiHashEncrypted.encryptedToken,
+      apiHashIv: apiHashEncrypted.tokenIv,
+      apiHashTag: apiHashEncrypted.tokenTag,
+      apiHashKeyVersion: apiHashEncrypted.tokenKeyVersion,
+      sessionEncrypted: sessionEncrypted.encryptedToken,
+      sessionIv: sessionEncrypted.tokenIv,
+      sessionTag: sessionEncrypted.tokenTag,
+      sessionKeyVersion: sessionEncrypted.tokenKeyVersion,
+      status: 'ACTIVE',
+      lastSeenAt: now,
+      lastSuccessfulConnectionAt: now,
+    });
+
     return {
       districtId,
       districtName,
@@ -360,7 +382,7 @@ describe('Story 6.4: Execute Permanent Live-System District Deletion Integration
   }
 
   describe('1. Comprehensive Multi-Table Live Data Purging & FK Restriction Handling (AC 1, 2, 3, 4, 5)', () => {
-    it('permanently deletes all live data across all 17 tables in strict topological order and persists surviving tombstone', async () => {
+    it('permanently deletes all live data across all 18 tables in strict topological order and persists surviving tombstone', async () => {
       const seed = await seedCompleteDistrict('Сирғали', 'CANCELLED', -1);
 
       // Execute live deletion
@@ -387,7 +409,7 @@ describe('Story 6.4: Execute Permanent Live-System District Deletion Integration
       const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
       expect(expiryDeadline - actualAt).toBe(thirtyDaysMs);
 
-      // ── VERIFY ALL 17 LIVE TABLES ARE PURGED FOR THIS DISTRICT ──
+      // ── VERIFY ALL 18 LIVE TABLES ARE PURGED FOR THIS DISTRICT ──
       // 1. topic_projections
       const projs = await db.select().from(topicProjections).where(eq(topicProjections.districtId, seed.districtId));
       expect(projs.length).toBe(0);
@@ -456,6 +478,10 @@ describe('Story 6.4: Execute Permanent Live-System District Deletion Integration
       const dists = await db.select().from(districts).where(eq(districts.id, seed.districtId));
       expect(dists.length).toBe(0);
 
+      // 18. district_telegram_userbot_sessions
+      const userbotSess = await db.select().from(districtTelegramUserbotSessions).where(eq(districtTelegramUserbotSessions.districtId, seed.districtId));
+      expect(userbotSess.length).toBe(0);
+
       // ── VERIFY SURVIVING TOMBSTONE IN district_deletion_records ──
       const tombstones = await db.select().from(districtDeletionRecords).where(eq(districtDeletionRecords.districtId, seed.districtId));
       expect(tombstones.length).toBe(1);
@@ -492,6 +518,10 @@ describe('Story 6.4: Execute Permanent Live-System District Deletion Integration
 
       const survivingSubs = await db.select().from(districtSubscriptions).where(eq(districtSubscriptions.districtId, survivor.districtId));
       expect(survivingSubs.length).toBe(1);
+
+      const survivingUserbot = await db.select().from(districtTelegramUserbotSessions).where(eq(districtTelegramUserbotSessions.districtId, survivor.districtId));
+      expect(survivingUserbot.length).toBe(1);
+      expect(survivingUserbot[0].status).toBe('ACTIVE');
     });
   });
 

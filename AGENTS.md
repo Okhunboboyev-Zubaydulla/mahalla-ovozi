@@ -11,6 +11,20 @@ Discovery: At task start and whenever task nature changes, scan available skills
 Activation: If a skill is relevant and not explicitly attached — load it implicitly via `view_file` and follow instructions.
 Conflict order: Skill vs user request → user wins. Skill vs safety/verification → refuse that part and state why.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and specs for this repo live as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles map to the label strings `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the repo root plus the ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+
 ## MODULE: SEARCH TOOLING & GREPAI PRIORITY
 Priority: `grepai` is the PRIMARY tool for code exploration, domain logic understanding, and call-graph tracing.
 Default Rule: Use `grepai search` instead of grep/find when searching by intent or behavior (always pass `--json` and `--compact` to save ~80% context tokens). Use `grep_search` only for exact literal strings/identifiers, and `find_by_name` for filenames.
@@ -56,4 +70,5 @@ Risk-Proportional Verification on Modifications:
 - Scoped Logic / Bug Fixes: Execute ONLY the single directly affected test file (e.g., `pnpm vitest run path/to/spec.test.ts`). Never run global test suites (`pnpm test`).
 - High-Risk / Core Architectural Changes: Run targeted test files plus fast scoped type-checks on modified modules.
 - Strict Ban on Full-Repo Test Suites: Never run repository-wide test suites or slow E2E tests during routine tasks unless explicitly instructed by the user.
+- Specs written to disk under `.scratch/<feature-slug>/` are comprehensive, never capped unless the User sets a cap. Chat replies stay dense but must not drop decision-relevant content.
 Anti-Redundancy Adherence: Strictly observe the global Anti-Redundancy & Prior State Trust rule. Never re-run test suites or type-checks on stable, unchanged parts of the codebase at session start or after unrelated modifications unless explicitly requested by the user.

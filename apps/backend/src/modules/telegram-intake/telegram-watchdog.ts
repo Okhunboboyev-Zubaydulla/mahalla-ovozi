@@ -65,7 +65,7 @@ export async function checkAndHealTelegramWebhooks(
   const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
 
   const res = await pool.query(
-    `SELECT bot_id, encrypted_token, token_iv, token_tag
+    `SELECT bot_id, encrypted_token, token_iv, token_tag, token_key_version
      FROM district_telegram_bots
      WHERE status = 'VALID'`,
   );
@@ -84,6 +84,7 @@ export async function checkAndHealTelegramWebhooks(
         encryptedToken: row.encrypted_token,
         tokenIv: row.token_iv,
         tokenTag: row.token_tag,
+        tokenKeyVersion: row.token_key_version,
       });
     } catch (err: unknown) {
       console.error('[watchdog:telegram] Failed to decrypt bot token', {

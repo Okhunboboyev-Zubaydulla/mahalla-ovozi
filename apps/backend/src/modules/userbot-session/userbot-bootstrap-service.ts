@@ -4,7 +4,7 @@ import {
   districts,
   districtTelegramUserbotSessions,
 } from '../../adapters/db/schema/index.js';
-import { encryptToken } from '../../adapters/crypto/token-cipher.js';
+import { encryptToken, decryptToken, getActiveKeyVersion } from '../../adapters/crypto/token-cipher.js';
 import { recordAuditEvent } from '../audit/audit-service.js';
 import { DistrictNotFoundError } from '../districts/districts-service.js';
 import {
@@ -15,10 +15,16 @@ import {
   SessionBannedError,
 } from './userbot-session-service.js';
 import {
+  PhoneNumberSchema,
+  ApiIdSchema,
+  ApiHashSchema,
+} from '@mahalla-ovozi/api-contracts';
+import {
   UserbotAuthClientPort,
   UserbotAuthError,
   InvalidPhoneCodeError,
   Invalid2FAPasswordError,
+  UserbotCredentialValidationError,
 } from './userbot-auth-port.js';
 import { createDefaultUserbotAuthClient } from '../../adapters/telegram/userbot-auth-client.js';
 import { logger } from '../../utils/logger.js';
@@ -29,8 +35,10 @@ export interface BootstrapUserbotSessionParams {
   getPassword?: () => Promise<string>;
   authClient?: UserbotAuthClientPort;
   actorId?: string;
+  actorRole?: string;
   apiHash?: string;
   customEncryptionKey?: string;
+  keyVersion?: string;
 }
 
 /**
@@ -81,31 +89,75 @@ export async function bootstrapUserbotSession(
     throw new SessionBannedError(districtId);
   }
 
-  // 3. Resolve API credentials
-  const apiHash = session.apiHash?.trim() || params.apiHash?.trim();
-  if (!apiHash) {
-    throw new UserbotAuthError(`API Hash is missing for userbot session of district ${districtId}.`);
+  // 3. Resolve API credentials (decrypt from envelope if present, or fallback to params)
+  let rawApiHash: string | null = null;
+  if (session.apiHashEncrypted && session.apiHashIv && session.apiHashTag) {
+    if (!session.apiHashKeyVersion || session.apiHashKeyVersion.trim().length === 0) {
+      throw new Error(
+        `Userbot session row '${session.id}' (district '${session.districtId}') has encrypted apiHash but a null or missing apiHashKeyVersion`,
+      );
+    }
+    rawApiHash = decryptToken(
+      {
+        encryptedToken: session.apiHashEncrypted,
+        tokenIv: session.apiHashIv,
+        tokenTag: session.apiHashTag,
+        tokenKeyVersion: session.apiHashKeyVersion,
+      },
+      params.customEncryptionKey,
+    );
+  } else if (params.apiHash !== undefined && params.apiHash !== null) {
+    rawApiHash = params.apiHash;
   }
+
+  // 4. Validate credentials identically before any protocol handshake is attempted:
+  const phoneValidation = PhoneNumberSchema.safeParse(session.phoneNumber);
+  if (!phoneValidation.success) {
+    throw new UserbotCredentialValidationError(
+      'phoneNumber',
+      phoneValidation.error.issues[0]?.message || 'Invalid phoneNumber in session.',
+    );
+  }
+
+  const apiIdValidation = ApiIdSchema.safeParse(session.apiId);
+  if (!apiIdValidation.success) {
+    throw new UserbotCredentialValidationError(
+      'apiId',
+      apiIdValidation.error.issues[0]?.message || 'Invalid apiId in session.',
+    );
+  }
+
+  const hashValidation = ApiHashSchema.safeParse(rawApiHash);
+  if (!hashValidation.success || !hashValidation.data) {
+    throw new UserbotCredentialValidationError(
+      'apiHash',
+      `API Hash is required for userbot session bootstrap of district ${districtId} and cannot be empty or whitespace-only.`,
+    );
+  }
+
+  const validatedPhoneNumber = phoneValidation.data;
+  const validatedApiId = apiIdValidation.data;
+  const validatedApiHash = hashValidation.data;
 
   const authClient = params.authClient !== undefined ? params.authClient : createDefaultUserbotAuthClient();
 
   try {
-    // 4. Send confirmation code to Telegram account
+    // 5. Send confirmation code to Telegram account
     const sendCodeResult = await authClient.sendCode(
-      session.phoneNumber,
-      session.apiId,
-      apiHash,
+      validatedPhoneNumber,
+      validatedApiId,
+      validatedApiHash,
     );
 
-    // 5. Prompt for the phone verification code
+    // 6. Prompt for the phone verification code
     const phoneCode = await params.getPhoneCode();
     if (!phoneCode || phoneCode.trim().length === 0) {
       throw new InvalidPhoneCodeError('Phone confirmation code cannot be empty.');
     }
 
-    // 6. Sign in with the received code
+    // 7. Sign in with the received code
     const signInResult = await authClient.signIn({
-      phoneNumber: session.phoneNumber,
+      phoneNumber: validatedPhoneNumber,
       phoneCodeHash: sendCodeResult.phoneCodeHash,
       phoneCode: phoneCode.trim(),
     });
@@ -128,15 +180,39 @@ export async function bootstrapUserbotSession(
       sessionString = signInResult.sessionString;
     }
 
-    // 7. Encrypt session string using AES-256-GCM
+    // 8. Encrypt session string and API hash using AES-256-GCM
+    const targetKeyVersion = params.keyVersion ?? getActiveKeyVersion();
     const encrypted = encryptToken(
       sessionString.trim(),
-      'v1',
+      targetKeyVersion,
+      params.customEncryptionKey,
+    );
+    const encApiHash = encryptToken(
+      validatedApiHash,
+      targetKeyVersion,
       params.customEncryptionKey,
     );
 
     // 8. Persist encrypted credentials and transition status to ACTIVE atomically with audit event
     const updated = await db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.id, session.id))
+        .limit(1);
+
+      if (!current) {
+        throw new UserbotSessionNotFoundError(districtId);
+      }
+
+      if (current.status === 'DISABLED') {
+        throw new UserbotSessionDisabledError(districtId);
+      }
+
+      if (current.status === 'BANNED') {
+        throw new SessionBannedError(districtId);
+      }
+
       const [updatedRow] = await tx
         .update(districtTelegramUserbotSessions)
         .set({
@@ -145,6 +221,10 @@ export async function bootstrapUserbotSession(
           sessionIv: encrypted.tokenIv,
           sessionTag: encrypted.tokenTag,
           sessionKeyVersion: encrypted.tokenKeyVersion,
+          apiHashEncrypted: encApiHash.encryptedToken,
+          apiHashIv: encApiHash.tokenIv,
+          apiHashTag: encApiHash.tokenTag,
+          apiHashKeyVersion: encApiHash.tokenKeyVersion,
           lastSeenAt: new Date(),
           updatedAt: new Date(),
         })
@@ -159,11 +239,13 @@ export async function bootstrapUserbotSession(
       await recordAuditEvent(tx, {
         districtId,
         actorId: params.actorId || null,
-        actorRole: 'PRODUCT_OWNER',
+        actorRole: params.actorRole ?? 'PRODUCT_OWNER',
         action: 'USERBOT_SESSION_ACTIVATED',
         metadata: {
           sessionId: session.id,
           status: 'ACTIVE',
+          previousStatus: current.status,
+          newStatus: 'ACTIVE',
         },
       });
 

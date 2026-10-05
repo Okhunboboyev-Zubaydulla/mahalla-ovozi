@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import type PgBoss from 'pg-boss';
-import { eq, desc, sql } from 'drizzle-orm';
+import { eq, and, or, inArray, desc, sql } from 'drizzle-orm';
 import {
   ComponentHealthObservation,
   ComponentType,
@@ -17,6 +17,7 @@ import {
   aiOperations,
   aiProfiles,
   auditEvents,
+  operationalIssues,
 } from '../../adapters/db/schema/index.js';
 import {
   evaluateFreshness,
@@ -741,6 +742,58 @@ export async function checkDistrictIntakeHealth(
   const now = new Date();
   const checkedAt = now.toISOString();
   const intakeDelayThresholdMs = config?.intakeDelayThresholdMs || INTAKE_DELAY_THRESHOLD_MS;
+
+  const [activeDegradedIssue] = await db
+    .select({
+      id: operationalIssues.id,
+      startedAt: operationalIssues.startedAt,
+      sanitizedDescription: operationalIssues.sanitizedDescription,
+      issueCategory: operationalIssues.issueCategory,
+      metadata: operationalIssues.metadata,
+    })
+    .from(operationalIssues)
+    .where(
+      and(
+        eq(operationalIssues.districtId, districtId),
+        eq(operationalIssues.status, 'ACTIVE'),
+        or(
+          and(
+            eq(operationalIssues.component, 'USERBOT'),
+            or(
+              eq(operationalIssues.healthStatus, 'Degraded'),
+              eq(operationalIssues.healthStatus, 'Unavailable'),
+            ),
+          ),
+          inArray(operationalIssues.issueCategory, [
+            'UNRECOVERABLE_GAP',
+            'USERBOT_BANNED',
+            'USERBOT_SESSION_BANNED',
+            'USERBOT_STALE',
+            'STALE_INACTIVITY',
+          ]),
+        ),
+      ),
+    )
+    .limit(1);
+
+  if (activeDegradedIssue) {
+    return createObservation({
+      component: 'message_intake',
+      scope: 'DISTRICT',
+      districtId,
+      status: 'Degraded',
+      lastCheckAt: activeDegradedIssue.startedAt.toISOString(),
+      checkedAt,
+      outcome: 'failure',
+      errorCode: activeDegradedIssue.issueCategory,
+      errorMessage: activeDegradedIssue.sanitizedDescription,
+      isApplicable: true,
+      diagnostics: {
+        lastMessageReceivedAt: undefined,
+        ...(activeDegradedIssue.metadata ? (activeDegradedIssue.metadata as Record<string, unknown>) : {}),
+      },
+    });
+  }
 
   const latestRecords = await db
     .select()

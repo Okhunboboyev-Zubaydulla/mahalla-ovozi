@@ -34,7 +34,7 @@ import {
 import { resolveTargetTopic } from './topic-matching-resolver.js';
 import { calculateRetentionDeadline } from '../retention/index.js';
 import { clearPendingRetryFlag } from '../issues/retry-service.js';
-import { extractPostgresError, isPostgresError } from '../../adapters/db/client.js';
+import { findUniqueViolation } from '../../adapters/db/client.js';
 
 /**
  * The coordinator's one retry-signalling error mode: the Mahalla snapshot, or the
@@ -755,16 +755,13 @@ export async function assignEvidenceToTopic(
   } catch (err: unknown) {
     // Handle unique violation gracefully for duplicate replays (AC 16 / Matrix #26).
     // Detection goes through the shared adapter helper rather than raw `any` field
-    // reads: extractPostgresError unwraps Drizzle's Error.cause nesting, which a
-    // bare `err.code` read misses, and the match keys on the constraint NAME only.
+    // reads: findUniqueViolation unwraps Drizzle's Error.cause nesting at any depth,
+    // which a bare `err.code` or 1-level read misses, and matches both SQLSTATE 23505
+    // and the constraint NAME on the exact same error layer.
     // The previous `String(err?.detail).includes('already exists')` arm keyed on a
     // localized, driver-generated message fragment — if the driver wording changed
     // the arm silently stopped matching and a duplicate burned a retry.
-    const pgErr = extractPostgresError(err);
-    if (
-      isPostgresError(err, '23505') &&
-      (pgErr?.constraint ?? '').includes('accepted_evidence_district_chat_msg_idx')
-    ) {
+    if (findUniqueViolation(err, 'accepted_evidence_district_chat_msg_idx')) {
       return {
         status: 'IGNORED_DUPLICATE_VIOLATION',
         intakeId,

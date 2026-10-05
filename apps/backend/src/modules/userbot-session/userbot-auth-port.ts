@@ -61,3 +61,13 @@ export class Invalid2FAPasswordError extends UserbotAuthError {
     this.name = 'Invalid2FAPasswordError';
   }
 }
+
+export class UserbotCredentialValidationError extends UserbotAuthError {
+  override readonly code: string = 'VALIDATION_ERROR';
+  readonly field: string;
+  constructor(field: string, message: string) {
+    super(message);
+    this.name = 'UserbotCredentialValidationError';
+    this.field = field;
+  }
+}

@@ -204,6 +204,34 @@
       "when": 1789800582989,
       "tag": "0028_elite_black_bird",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791120603587,
+      "tag": "0029_cold_karnak",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791124408547,
+      "tag": "0030_uneven_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791125293827,
+      "tag": "0031_chief_venom",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791130000000,
+      "tag": "0032_wakeful_overlord",
+      "breakpoints": true
     }
   ]
 }
