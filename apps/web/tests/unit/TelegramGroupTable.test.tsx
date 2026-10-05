@@ -139,10 +139,12 @@ describe('TelegramGroupTable Component Tests', () => {
       {
         ...mockGroups[0]!,
         transport: 'BOT_API',
+        privacyModeDisabled: false,
       },
       {
         ...mockGroups[1]!,
         transport: 'USERBOT',
+        privacyModeDisabled: false,
       },
     ];
 
@@ -151,6 +153,8 @@ describe('TelegramGroupTable Component Tests', () => {
     await waitFor(() => {
       expect(screen.getByText('BOT_API')).toBeDefined();
       expect(screen.getByText('USERBOT')).toBeDefined();
+      expect(screen.getByText('Фаол (Чекланган)')).toBeDefined();
+      expect(screen.getByText('Талаб этилмайди (Тўлиқ қабул)')).toBeDefined();
     });
   });
 });

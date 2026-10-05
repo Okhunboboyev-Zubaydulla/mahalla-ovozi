@@ -67,6 +67,136 @@ interface MtprotoUserRecord {
   [key: string]: unknown;
 }
 
+function isTelegramClient(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const constructorName = value.constructor?.name;
+  if (
+    constructorName === 'TelegramClient' ||
+    constructorName === 'ControllableTelegramClient' ||
+    constructorName === 'TelegramClientStub'
+  ) {
+    return true;
+  }
+  const rec = value as Record<string, unknown>;
+  if (
+    '_eventBuilders' in rec ||
+    ('_sender' in rec && 'session' in rec)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function sanitizeValue(value: unknown, activeStack: Set<unknown>): unknown {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  const valType = typeof value;
+  if (valType === 'boolean' || valType === 'string') {
+    return value;
+  }
+  if (valType === 'number') {
+    return Number.isFinite(value as number) ? value : null;
+  }
+  if (valType === 'bigint') {
+    const num = Number(value);
+    return Number.isSafeInteger(num) ? num : (value as bigint).toString();
+  }
+  if (valType === 'function' || valType === 'symbol') {
+    return undefined;
+  }
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+  }
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+    return value.toString('base64');
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('base64');
+  }
+  if (isTelegramClient(value)) {
+    return undefined;
+  }
+  if (activeStack.has(value)) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    activeStack.add(value);
+    try {
+      const list: unknown[] = [];
+      for (const item of value) {
+        if (isTelegramClient(item)) {
+          continue;
+        }
+        const sanitizedItem = sanitizeValue(item, activeStack);
+        if (sanitizedItem !== undefined) {
+          list.push(sanitizedItem);
+        }
+      }
+      return list;
+    } finally {
+      activeStack.delete(value);
+    }
+  }
+
+  activeStack.add(value);
+  try {
+    const rec = value as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(rec)) {
+      if (key === '_client' || key === 'client' || key === '__client') {
+        continue;
+      }
+      let childVal: unknown;
+      try {
+        childVal = rec[key];
+      } catch {
+        continue;
+      }
+      if (typeof childVal === 'function' || typeof childVal === 'symbol') {
+        continue;
+      }
+      if (isTelegramClient(childVal)) {
+        continue;
+      }
+      const sanitizedChild = sanitizeValue(childVal, activeStack);
+      if (sanitizedChild !== undefined) {
+        result[key] = sanitizedChild;
+      }
+    }
+    return result;
+  } finally {
+    activeStack.delete(value);
+  }
+}
+
+/**
+ * Strips `_client`, `client`, and any cyclic references from raw update payloads,
+ * returning a clean, JSON-serializable plain object/array.
+ */
+export function sanitizeRawUpdatePayload(update: unknown): unknown {
+  if (update === null || update === undefined) {
+    return update;
+  }
+  if (typeof update !== 'object') {
+    if (typeof update === 'bigint') {
+      const num = Number(update);
+      return Number.isSafeInteger(num) ? num : (update as bigint).toString();
+    }
+    return update;
+  }
+
+  const activeStack = new Set<unknown>();
+  const sanitized = sanitizeValue(update, activeStack);
+  if (sanitized === undefined) {
+    return {};
+  }
+  return sanitized;
+}
+
 function getTypeName(obj: unknown): string | undefined {
   if (!obj || typeof obj !== 'object') {
     return undefined;
@@ -376,6 +506,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     };
   }
 
+  const sanitizedRawPayload = sanitizeRawUpdatePayload(update);
   const payload = update as Record<string, unknown>;
   const rootType = getTypeName(payload);
   const isEdit = classifyStructuralEdit(rootType);
@@ -398,7 +529,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     return {
       status: 'DROPPED',
       reason: 'UNSUPPORTED_UPDATE_TYPE',
-      rawPayload: update,
+      rawPayload: sanitizedRawPayload,
     };
   }
 
@@ -420,7 +551,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     return {
       status: 'DROPPED',
       reason: 'SERVICE_MESSAGE',
-      rawPayload: update,
+      rawPayload: sanitizedRawPayload,
     };
   }
 
@@ -429,7 +560,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     return {
       status: 'DROPPED',
       reason: 'EMPTY_MESSAGE',
-      rawPayload: update,
+      rawPayload: sanitizedRawPayload,
     };
   }
 
@@ -438,7 +569,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     return {
       status: 'DROPPED',
       reason: 'UNSUPPORTED_UPDATE_TYPE',
-      rawPayload: update,
+      rawPayload: sanitizedRawPayload,
     };
   }
 
@@ -470,13 +601,13 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
       return {
         status: 'DROPPED',
         reason: 'MALFORMED_UPDATE',
-        rawPayload: update,
+        rawPayload: sanitizedRawPayload,
       };
     }
     return {
       status: 'DROPPED',
       reason: 'UNSUPPORTED_UPDATE_TYPE',
-      rawPayload: update,
+      rawPayload: sanitizedRawPayload,
     };
   }
 
@@ -490,7 +621,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     return {
       status: 'DROPPED',
       reason: 'MALFORMED_UPDATE',
-      rawPayload: update,
+      rawPayload: sanitizedRawPayload,
     };
   }
 
@@ -756,7 +887,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
         return {
           status: 'DROPPED',
           reason: 'MALFORMED_UPDATE',
-          rawPayload: update,
+          rawPayload: sanitizedRawPayload,
         };
       }
       const photoId = cleanIdString(photoObj.id);
@@ -764,7 +895,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
         return {
           status: 'DROPPED',
           reason: 'MALFORMED_UPDATE',
-          rawPayload: update,
+          rawPayload: sanitizedRawPayload,
         };
       }
 
@@ -812,7 +943,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
         return {
           status: 'DROPPED',
           reason: 'MALFORMED_UPDATE',
-          rawPayload: update,
+          rawPayload: sanitizedRawPayload,
         };
       }
       const docId = cleanIdString(doc.id);
@@ -820,7 +951,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
         return {
           status: 'DROPPED',
           reason: 'MALFORMED_UPDATE',
-          rawPayload: update,
+          rawPayload: sanitizedRawPayload,
         };
       }
 
@@ -892,7 +1023,7 @@ export function normalizeMtprotoUpdate(update: unknown): MtprotoNormalizationRes
     originalTimestamp,
     calendarDay,
     normalizedMessage,
-    rawPayload: update,
+    rawPayload: sanitizedRawPayload,
   };
 
   return {

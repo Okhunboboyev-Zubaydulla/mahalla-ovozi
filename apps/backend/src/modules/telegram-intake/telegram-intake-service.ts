@@ -24,8 +24,12 @@ import { getTashkentCalendarDay } from './timezone-util.js';
 import type { GroupTransport } from '@mahalla-ovozi/api-contracts';
 
 import type { TelegramUpdate, TelegramMessage } from '../../adapters/telegram/telegram-types.js';
-import type { CanonicalIngestEnvelope } from '../../adapters/telegram/mtproto-normalizer.js';
+import {
+  sanitizeRawUpdatePayload,
+  type CanonicalIngestEnvelope,
+} from '../../adapters/telegram/mtproto-normalizer.js';
 export type { TelegramUpdate, CanonicalIngestEnvelope };
+export { sanitizeRawUpdatePayload };
 
 export type AuthorizationFailureReason =
   | 'BOT_NOT_FOUND'
@@ -419,11 +423,11 @@ export async function processUserbotIngestEnvelope(
   // Bot-API compatible payload with normalized message embedded for all downstream consumers
   const rawPayload =
     typeof envelope.rawPayload === 'object' && envelope.rawPayload !== null
-      ? {
+      ? sanitizeRawUpdatePayload({
           ...(envelope.rawPayload as Record<string, unknown>),
           message: envelope.normalizedMessage,
           ...(isEdit ? { edited_message: envelope.normalizedMessage } : {}),
-        }
+        })
       : {
           message: envelope.normalizedMessage,
           ...(isEdit ? { edited_message: envelope.normalizedMessage } : {}),
@@ -480,6 +484,7 @@ export async function ingestTelegramMessage(
   payload: IngestTelegramMessagePayload,
 ): Promise<IngestTelegramMessageResult> {
   const { tx, enqueueJob } = scope;
+  const safeRawPayload = sanitizeRawUpdatePayload(payload.rawPayload);
 
   // Edited message detection:
   // If isEdit: check existing record for (district_id, telegram_chat_id, telegram_message_id)
@@ -516,7 +521,7 @@ export async function ingestTelegramMessage(
       await tx
         .update(telegramIntakeRecords)
         .set({
-          rawPayload: payload.rawPayload,
+          rawPayload: safeRawPayload,
           updatedAt: new Date(),
         })
         .where(eq(telegramIntakeRecords.id, existing.id));
@@ -580,7 +585,7 @@ export async function ingestTelegramMessage(
       telegramUserId: payload.userId,
       originalTimestamp: payload.originalTimestamp,
       calendarDay: payload.calendarDay,
-      rawPayload: payload.rawPayload,
+      rawPayload: safeRawPayload,
       createdAt: new Date(),
       updatedAt: new Date(),
     })
@@ -635,7 +640,7 @@ export async function ingestTelegramMessage(
     updateId: payload.updateId,
     telegramUserId: payload.userId,
     originalTimestamp: record.originalTimestamp,
-    rawPayload: payload.rawPayload,
+    rawPayload: safeRawPayload,
   });
 
   let jobId: string | null = null;

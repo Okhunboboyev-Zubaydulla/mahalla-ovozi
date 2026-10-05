@@ -457,6 +457,96 @@ describe('Ticket 05: Envelope adaptation and end-to-end intake proof', () => {
     }
   });
 
+  it('successfully ingests an update with circular _client reference without circular JSON errors', async () => {
+    const manager = await startUserbotService({
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+
+    try {
+      const client = clientForSession(sessionString);
+
+      // Construct a mock TelegramClient instance with circular reference structure
+      // exactly matching teleproto: client._eventBuilders -> Raw -> client
+      class TelegramClientStub {
+        _eventBuilders: unknown[] = [];
+        constructor() {
+          const rawBuilder = { client: this };
+          this._eventBuilders.push(rawBuilder);
+        }
+      }
+      const tgClient = new TelegramClientStub();
+
+      // Inbound update having circular _client reference at root and message level,
+      // plus an arbitrary circular reference to assert full cycle resilience.
+      const rawUpdate = newChannelMessage({
+        chatChannelId,
+        messageId: 1601,
+        userId: 998811,
+        text: 'Mahallada elektr tarmoqlarida uzilishlar bo‘lyapti',
+      }) as Record<string, unknown>;
+
+      (rawUpdate as any)._client = tgClient;
+      (rawUpdate as any).client = tgClient;
+      (rawUpdate.message as any)._client = tgClient;
+      (rawUpdate.message as any).selfCycle = rawUpdate.message;
+
+      // Direct normalizer contract check: envelope.rawPayload must be sanitized and cycle-free
+      const normResult = normalizeMtprotoUpdate(rawUpdate);
+      expect(normResult.status).toBe('NORMALIZED');
+      if (normResult.status === 'NORMALIZED') {
+        expect(() => JSON.stringify(normResult.envelope.rawPayload)).not.toThrow();
+        const normPayload = normResult.envelope.rawPayload as Record<string, unknown>;
+        expect(normPayload._client).toBeUndefined();
+        expect(normPayload.client).toBeUndefined();
+        expect((normPayload.message as Record<string, unknown>)?._client).toBeUndefined();
+        expect((normPayload.message as Record<string, unknown>)?._).toBe('Message');
+      }
+
+      // End-to-end userbot service ingest: push the circular update through the client
+      client.pushUpdate(rawUpdate);
+
+      await vi.waitFor(
+        async () => {
+          const [record] = await db
+            .select()
+            .from(telegramIntakeRecords)
+            .where(
+              and(
+                eq(telegramIntakeRecords.districtId, districtId),
+                eq(telegramIntakeRecords.telegramChatId, chatId),
+                eq(telegramIntakeRecords.telegramMessageId, '1601'),
+              ),
+            );
+          expect(record).toBeDefined();
+        },
+        { timeout: 5000, interval: 50 },
+      );
+
+      const [record] = await db
+        .select()
+        .from(telegramIntakeRecords)
+        .where(
+          and(
+            eq(telegramIntakeRecords.districtId, districtId),
+            eq(telegramIntakeRecords.telegramChatId, chatId),
+            eq(telegramIntakeRecords.telegramMessageId, '1601'),
+          ),
+        );
+
+      expect(record).toBeDefined();
+      expect(record!.telegramMessageId).toBe('1601');
+      expect(() => JSON.stringify(record!.rawPayload)).not.toThrow();
+      const persistedPayload = record!.rawPayload as Record<string, unknown>;
+      expect(persistedPayload._client).toBeUndefined();
+      expect(persistedPayload.client).toBeUndefined();
+      expect((persistedPayload.message as Record<string, unknown>)?._client).toBeUndefined();
+      expect(persistedPayload._).toBe('UpdateNewChannelMessage');
+    } finally {
+      await stopUserbotService(manager);
+    }
+  });
+
   it('keeps the shared intake core free of transport-specific branching', () => {
     const testsDir = path.dirname(fileURLToPath(import.meta.url));
     const intakePath = path.join(

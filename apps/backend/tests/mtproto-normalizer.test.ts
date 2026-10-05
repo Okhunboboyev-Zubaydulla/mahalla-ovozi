@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeMtprotoUpdate,
+  sanitizeRawUpdatePayload,
 } from '../src/adapters/telegram/mtproto-normalizer.js';
 import {
   filterTelegramMessage,
@@ -547,6 +548,90 @@ describe('MTProto Normalizer (Ticket 15 - Pure DB-Free Unit Tests)', () => {
         if (result.status === 'DROPPED') {
           expect(result.reason).toBe('MALFORMED_UPDATE');
         }
+      }
+    });
+  });
+
+  describe('Payload sanitization & circular structure safety', () => {
+    it('strips _client and client properties and breaks cycles cleanly', () => {
+      class TelegramClient {
+        _eventBuilders: unknown[] = [];
+        constructor() {
+          this._eventBuilders.push({ client: this });
+        }
+      }
+      const clientInstance = new TelegramClient();
+
+      const cyclicObj: Record<string, unknown> = {
+        name: 'test-event',
+        _client: clientInstance,
+        client: clientInstance,
+        nested: {
+          client: clientInstance,
+          count: 42,
+        },
+      };
+      cyclicObj.self = cyclicObj;
+
+      const sanitized = sanitizeRawUpdatePayload(cyclicObj) as Record<string, unknown>;
+      expect(sanitized.name).toBe('test-event');
+      expect(sanitized._client).toBeUndefined();
+      expect(sanitized.client).toBeUndefined();
+      expect((sanitized.nested as Record<string, unknown>).client).toBeUndefined();
+      expect((sanitized.nested as Record<string, unknown>).count).toBe(42);
+      expect(sanitized.self).toBeUndefined();
+
+      // Must be safely serializable via standard JSON.stringify
+      expect(() => JSON.stringify(sanitized)).not.toThrow();
+    });
+
+    it('safely converts BigInt values to JSON-serializable primitives', () => {
+      const payloadWithBigInt = {
+        id: 123456789n,
+        largeId: 9007199254740993n, // Exceeds Number.MAX_SAFE_INTEGER
+        details: {
+          chatId: 987654321n,
+        },
+      };
+
+      const sanitized = sanitizeRawUpdatePayload(payloadWithBigInt) as Record<string, unknown>;
+      expect(sanitized.id).toBe(123456789);
+      expect(sanitized.largeId).toBe('9007199254740993');
+      expect((sanitized.details as Record<string, unknown>).chatId).toBe(987654321);
+      expect(() => JSON.stringify(sanitized)).not.toThrow();
+    });
+
+    it('ensures normalizeMtprotoUpdate sanitizes envelope.rawPayload and dropped rawPayload', () => {
+      class TelegramClientStub {
+        _eventBuilders: unknown[] = [{ client: this }];
+      }
+      const tgClient = new TelegramClientStub();
+
+      // Well-formed message with circular _client
+      const update = {
+        _: 'UpdateNewChannelMessage',
+        _client: tgClient,
+        client: tgClient,
+        message: {
+          _: 'message',
+          id: 777,
+          peerId: { _: 'peerChannel', channelId: 1987654321 },
+          date: 1710000000,
+          message: 'Sinov xabari',
+          fromId: { _: 'peerUser', userId: 12345 },
+          _client: tgClient,
+        },
+        users: [{ id: 12345, firstName: 'Ali', bot: false }],
+      };
+
+      const result = normalizeMtprotoUpdate(update);
+      expect(result.status).toBe('NORMALIZED');
+      if (result.status === 'NORMALIZED') {
+        const rawPayload = result.envelope.rawPayload as Record<string, unknown>;
+        expect(rawPayload._client).toBeUndefined();
+        expect(rawPayload.client).toBeUndefined();
+        expect((rawPayload.message as Record<string, unknown>)._client).toBeUndefined();
+        expect(() => JSON.stringify(result.envelope.rawPayload)).not.toThrow();
       }
     });
   });

@@ -168,8 +168,12 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
       dataIndex: 'privacyModeDisabled',
       key: 'privacyModeDisabled',
       width: '20%',
-      render: (disabled: boolean) =>
-        disabled ? (
+      render: (disabled: boolean, record: TelegramGroupMapping) =>
+        record.transport === 'USERBOT' ? (
+          <Tag color="default" style={{ padding: '2px 8px', fontSize: '12px' }}>
+            Талаб этилмайди (Тўлиқ қабул)
+          </Tag>
+        ) : disabled ? (
           <Tag color="success" icon={<SafetyOutlined />} style={{ padding: '2px 8px', fontSize: '12px' }}>
             Ўчирилган (Тўлиқ қабул)
           </Tag>
