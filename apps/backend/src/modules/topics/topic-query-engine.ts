@@ -26,6 +26,7 @@ import {
   DistrictScopedActor,
 } from '@mahalla-ovozi/api-contracts';
 import { getTashkentCalendarDay, resolveDateBoundary } from '../telegram-intake/timezone-util.js';
+import { logger } from '../../utils/logger.js';
 import { escapeLikePattern, buildTopicSearchPredicate } from './topic-query-helpers.js';
 
 // --- Error Classes ---
@@ -650,8 +651,13 @@ async function checkProcessingDelay(
     if (degradedTransportIssue.rows && degradedTransportIssue.rows.length > 0) {
       return true;
     }
-  } catch {
-    // operational_issues table might not exist in certain test setups or schemas
+  } catch (issueProbeErr: unknown) {
+    // operational_issues may be absent in certain test setups or schemas; the probe is
+    // advisory, so the failure degrades to "no transport issue" but is logged rather than discarded.
+    logger.debug(
+      { districtId, err: issueProbeErr },
+      'Transport-degradation probe unavailable; treating district as having no active transport issue',
+    );
   }
 
   try {

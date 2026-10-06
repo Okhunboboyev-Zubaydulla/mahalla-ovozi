@@ -97,11 +97,11 @@ Before switching any group to `USERBOT` in the Mahalla Ovozi console or database
 When an operator or Product Owner triggers the kill switch or disables a userbot session (`POST /api/v1/districts/:districtId/userbot-session/disable`):
 
 1. **Server-Side Session Revocation:** The system executes `client.logOut()` via MTProto to terminate the authorization session directly on Telegram's servers. This ensures the auth key cannot be reused or hijacked.
-2. **Secret Envelope Erasure:** All cipher material in PostgreSQL (`session_encrypted`, `api_hash_encrypted`, `session_iv`, `session_tag`) is permanently wiped (`NULL`). Key version is preserved for audit trail integrity.
+2. **Session Secret Erasure:** The session cipher material in PostgreSQL (`session_encrypted`, `session_iv`, `session_tag`) is permanently wiped (`NULL`). The API credential envelope (`api_hash_encrypted`, `api_hash_iv`, `api_hash_tag`) is deliberately preserved so re-authentication does not require re-procuring the Telegram application credentials. Key version is preserved for audit trail integrity.
 3. **Status Transition to `DISABLED`:** The session row transitions to `DISABLED`, and ingestion immediately halts.
 4. **Re-Enabling Requires Re-Authentication (`PENDING`):**
    - Re-enabling a previously disabled session (`POST /api/v1/districts/:districtId/userbot-session/enable`) transitions status to `PENDING`, **not** `ACTIVE`.
-   - Because credentials and auth keys were completely destroyed during revocation, the session cannot silently resume. The operator must execute the interactive CLI bootstrap command again with phone code and 2FA password to generate a fresh session.
+   - Because the session string and its Telegram auth keys were destroyed during revocation, the session cannot silently resume. The stored API credential envelope survives, but it is not sufficient to restore transport: the operator must execute the interactive CLI bootstrap command again with phone code and 2FA password to generate a fresh session.
 
 ---
 

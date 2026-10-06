@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import type pg from 'pg';
+import type PgBoss from 'pg-boss';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -24,6 +25,8 @@ import {
   type UserbotClientFactoryOptions,
   type UserbotClientEvents,
   isOlderLibraryPosition,
+  parseUserbotUpdatePosition,
+  isNewerUserbotUpdatePosition,
 } from '../src/modules/userbot/index.js';
 import { GramJsUserbotClient } from '../src/adapters/telegram/userbot-client-adapter.js';
 import { PublicDistrictUserbotSessionSchema } from '@mahalla-ovozi/api-contracts';
@@ -43,13 +46,19 @@ class MockUserbotClient implements UserbotClientPort {
   private connected = false;
   currentPosition: string | null = null;
 
-  private listeners = {
-    message: [] as ((update: unknown) => void)[],
-    disconnect: [] as ((reason?: string | Error) => void)[],
-    reconnect: [] as (() => void)[],
-    error: [] as ((err: Error) => void)[],
-    ban: [] as ((details?: { reason?: string; error?: Error }) => void)[],
-    gap: [] as ((details?: { reason?: string; lastKnownPosition?: string | null; error?: Error }) => void)[],
+  /**
+   * A complete, key-aligned listener registry: every UserbotClientEvents key is present, so the
+   * generic `on`/`off` implementations below can index it with the event type parameter directly
+   * instead of casting. Omitting `signal` would make this double a structurally partial port.
+   */
+  private listeners: { [K in keyof UserbotClientEvents]: UserbotClientEvents[K][] } = {
+    message: [],
+    disconnect: [],
+    reconnect: [],
+    error: [],
+    ban: [],
+    gap: [],
+    signal: [],
   };
 
   constructor(params: UserbotClientFactoryOptions) {
@@ -85,11 +94,17 @@ class MockUserbotClient implements UserbotClientPort {
   }
 
   on<E extends keyof UserbotClientEvents>(event: E, listener: UserbotClientEvents[E]): void {
-    this.listeners[event].push(listener as any);
+    this.listeners[event].push(listener);
   }
 
   off<E extends keyof UserbotClientEvents>(event: E, listener: UserbotClientEvents[E]): void {
-    this.listeners[event] = (this.listeners[event] as any[]).filter((l) => l !== listener);
+    // Removed in place: assigning a filtered array back would not typecheck, because the generic
+    // key E is not narrowed to a single literal key by the compiler at the assignment site.
+    const registered = this.listeners[event];
+    const index = registered.indexOf(listener);
+    if (index >= 0) {
+      registered.splice(index, 1);
+    }
   }
 
   private emit(_event: 'disconnect', reason?: string | Error): void {
@@ -821,5 +836,464 @@ describe('Ticket 17: Update Position Persistence and Universal Catch-Up', () => 
     const entry32 = journal.entries.find((e: { idx: number }) => e.idx === 32);
     expect(entry32).toBeDefined();
     expect(entry32.tag).toBe('0032_wakeful_overlord');
+  });
+});
+
+describe('Ticket 17 follow-up: the stored position is the persisted message position and only ever advances', () => {
+  let pool: pg.Pool;
+  let db: DbClient;
+  const createdClients: Map<string, MockUserbotClient> = new Map();
+  const trackedDistricts: string[] = [];
+
+  const mockBoss = {
+    send: vi.fn().mockResolvedValue('mock-boss-job-id'),
+  } as unknown as PgBoss;
+
+  const mockClientFactory = (params: UserbotClientFactoryOptions): UserbotClientPort => {
+    const client = new MockUserbotClient(params);
+    createdClients.set(params.districtId, client);
+    return client;
+  };
+
+  function positionWithPts(pts: number): string {
+    return JSON.stringify({ version: 'teleproto-v1', pts, qts: 1, date: 1000 + pts, seq: 1 });
+  }
+
+  async function createFixture(): Promise<{ districtId: string; chatChannelId: number; chatId: string }> {
+    const districtId = `dist_posguard_${crypto.randomUUID()}`;
+    trackedDistricts.push(districtId);
+    const chatChannelId = Math.floor(1000000000 + Math.random() * 9000000000);
+    const chatId = `-100${chatChannelId}`;
+
+    await db.insert(districts).values({
+      id: districtId,
+      name: `PosGuard_${crypto.randomUUID().slice(0, 8)}`,
+      region: 'Tashkent',
+      status: 'ACTIVE',
+      accessEligible: true,
+    });
+
+    await createDistrictUserbotSession(db, {
+      districtId,
+      phoneNumber: `+99890${Math.floor(1000000 + Math.random() * 9000000)}`,
+      apiId: String(Math.floor(1000000 + Math.random() * 9000000)),
+      apiHash: 'test_hash_val',
+      sessionString: `session_str_${districtId}`,
+    });
+    await updateUserbotSessionStatus(db, districtId, { status: 'ACTIVE' });
+
+    await db.insert(districtTelegramGroups).values({
+      id: `dtg_posguard_${crypto.randomUUID()}`,
+      districtId,
+      mahallaName: 'Navbahor',
+      telegramChatId: chatId,
+      telegramChatTitle: 'Navbahor Mahalla Group',
+      transport: 'USERBOT',
+      status: 'VALID',
+      lastValidatedAt: new Date(),
+    });
+
+    return { districtId, chatChannelId, chatId };
+  }
+
+  async function readStoredPosition(districtId: string): Promise<string | null> {
+    const [row] = await db
+      .select({ pos: districtTelegramUserbotSessions.updatePosition })
+      .from(districtTelegramUserbotSessions)
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+    return row?.pos ?? null;
+  }
+
+  async function readIntakeRecord(
+    districtId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    const [record] = await db
+      .select()
+      .from(telegramIntakeRecords)
+      .where(
+        and(
+          eq(telegramIntakeRecords.districtId, districtId),
+          eq(telegramIntakeRecords.telegramMessageId, messageId),
+        ),
+      );
+    return Boolean(record);
+  }
+
+  function createManager(boss: PgBoss): UserbotConnectionManager {
+    return new UserbotConnectionManager({
+      db,
+      pool,
+      boss,
+      clientFactory: mockClientFactory,
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+  }
+
+  beforeAll(async () => {
+    pool = createDbPool();
+    db = createDbClient(pool);
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  afterEach(async () => {
+    for (const districtId of trackedDistricts) {
+      await db.delete(telegramIntakeRecords).where(eq(telegramIntakeRecords.districtId, districtId));
+      await db.delete(districtTelegramGroups).where(eq(districtTelegramGroups.districtId, districtId));
+      await db
+        .delete(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      await db.delete(districts).where(eq(districts.id, districtId));
+    }
+    trackedDistricts.length = 0;
+    createdClients.clear();
+    vi.restoreAllMocks();
+  });
+
+  it('PG-1: an unreadable stored position is never compared as if it were a real position', () => {
+    expect(parseUserbotUpdatePosition(null)).toBeNull();
+    expect(parseUserbotUpdatePosition('not json at all')).toBeNull();
+    expect(parseUserbotUpdatePosition('{"pts":100}')).toBeNull();
+    expect(
+      parseUserbotUpdatePosition('{"version":"gramjs-v0","pts":100,"qts":1,"date":1,"seq":1}'),
+    ).toBeNull();
+    expect(
+      parseUserbotUpdatePosition('{"version":"teleproto-v1","pts":100,"qts":1,"date":1}'),
+    ).toBeNull();
+    expect(parseUserbotUpdatePosition(positionWithPts(100))).toEqual({
+      version: 'teleproto-v1',
+      pts: 100,
+      qts: 1,
+      date: 1100,
+      seq: 1,
+    });
+  });
+
+  it('PG-2: only a strictly newer position is accepted', () => {
+    const p100 = parseUserbotUpdatePosition(positionWithPts(100));
+    const p101 = parseUserbotUpdatePosition(positionWithPts(101));
+    const p99 = parseUserbotUpdatePosition(positionWithPts(99));
+
+    expect(isNewerUserbotUpdatePosition(p100, p101)).toBe(true);
+    expect(isNewerUserbotUpdatePosition(p101, p100)).toBe(false);
+    expect(isNewerUserbotUpdatePosition(p100, p100)).toBe(false);
+    expect(isNewerUserbotUpdatePosition(p100, p99)).toBe(false);
+    expect(isNewerUserbotUpdatePosition(null, p100)).toBe(true);
+    expect(isNewerUserbotUpdatePosition(p100, null)).toBe(false);
+  });
+
+  it('PG-3: advanceUpdatePosition writes a newer position and refuses an equal, regressed, or unreadable one', async () => {
+    const fixture = await createFixture();
+    const manager = createManager(mockBoss);
+
+    const first = positionWithPts(500);
+    await expect(manager.advanceUpdatePosition(fixture.districtId, first, new Date())).resolves.toBe(
+      true,
+    );
+    expect(await readStoredPosition(fixture.districtId)).toBe(first);
+
+    const newer = positionWithPts(501);
+    await expect(manager.advanceUpdatePosition(fixture.districtId, newer, new Date())).resolves.toBe(
+      true,
+    );
+    expect(await readStoredPosition(fixture.districtId)).toBe(newer);
+
+    await expect(
+      manager.advanceUpdatePosition(fixture.districtId, positionWithPts(501), new Date()),
+    ).resolves.toBe(false);
+    expect(await readStoredPosition(fixture.districtId)).toBe(newer);
+
+    await expect(
+      manager.advanceUpdatePosition(fixture.districtId, positionWithPts(400), new Date()),
+    ).resolves.toBe(false);
+    expect(await readStoredPosition(fixture.districtId)).toBe(newer);
+
+    await expect(
+      manager.advanceUpdatePosition(fixture.districtId, 'not-a-position', new Date()),
+    ).rejects.toThrow(/not a valid teleproto-v1 update position/);
+    expect(await readStoredPosition(fixture.districtId)).toBe(newer);
+  });
+
+  it('PG-4: an unreadable stored position does not block a valid advance', async () => {
+    const fixture = await createFixture();
+    await db
+      .update(districtTelegramUserbotSessions)
+      .set({ updatePosition: '{"library":"gramjs","pts":9999}' })
+      .where(eq(districtTelegramUserbotSessions.districtId, fixture.districtId));
+
+    const manager = createManager(mockBoss);
+    const advance = positionWithPts(10);
+    await expect(
+      manager.advanceUpdatePosition(fixture.districtId, advance, new Date()),
+    ).resolves.toBe(true);
+    expect(await readStoredPosition(fixture.districtId)).toBe(advance);
+  });
+
+  it('PG-5: advancing a district with no session row fails loudly instead of silently succeeding', async () => {
+    const manager = createManager(mockBoss);
+    await expect(
+      manager.advanceUpdatePosition(`dist_missing_${crypto.randomUUID()}`, positionWithPts(1), new Date()),
+    ).rejects.toThrow(/no district_telegram_userbot_sessions row/);
+  });
+
+  it('PG-6: the persisted position is the one captured when the update arrived, not the live state after persistence', async () => {
+    const fixture = await createFixture();
+    const arrivedPosition = positionWithPts(600);
+    const laterPosition = positionWithPts(999);
+    const clientRef: { current: MockUserbotClient | null } = { current: null };
+
+    // The live client state moves on while the message is being persisted. The advanced position
+    // must still describe the message that was persisted, never this later value: on restart, a
+    // position covering an unpersisted update makes Telegram skip it permanently.
+    const bossThatAdvancesLiveState = {
+      send: vi.fn().mockImplementation(async () => {
+        clientRef.current?.setUpdatePosition(laterPosition);
+        return 'mock-boss-job-id';
+      }),
+    } as unknown as PgBoss;
+
+    const manager = createManager(bossThatAdvancesLiveState);
+    await manager.start();
+
+    const client = createdClients.get(fixture.districtId);
+    expect(client).toBeDefined();
+    clientRef.current = client!;
+    client!.setUpdatePosition(arrivedPosition);
+
+    client!.pushUpdate(
+      createMtprotoChannelMessage({
+        chatChannelId: fixture.chatChannelId,
+        messageId: 6001,
+        userId: 445566,
+        text: 'Position must describe this message',
+      }),
+    );
+
+    await waitFor(async () => readIntakeRecord(fixture.districtId, '6001'));
+    await waitFor(async () => (await readStoredPosition(fixture.districtId)) !== null);
+
+    expect(await readStoredPosition(fixture.districtId)).toBe(arrivedPosition);
+
+    await manager.stop();
+  });
+
+  it('PG-7: a stale in-flight update is persisted without rewinding the newer stored position', async () => {
+    const fixture = await createFixture();
+    const seeded = positionWithPts(700);
+    await db
+      .update(districtTelegramUserbotSessions)
+      .set({ updatePosition: seeded, updatePositionAdvancedAt: new Date() })
+      .where(eq(districtTelegramUserbotSessions.districtId, fixture.districtId));
+
+    const manager = createManager(mockBoss);
+    await manager.start();
+
+    const client = createdClients.get(fixture.districtId)!;
+    client.setUpdatePosition(positionWithPts(650));
+    client.pushUpdate(
+      createMtprotoChannelMessage({
+        chatChannelId: fixture.chatChannelId,
+        messageId: 7001,
+        userId: 556677,
+        text: 'Late delivery of an older update',
+      }),
+    );
+
+    await waitFor(async () => readIntakeRecord(fixture.districtId, '7001'));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(await readStoredPosition(fixture.districtId)).toBe(seeded);
+
+    await manager.stop();
+  });
+
+  it('PG-11: an update arriving while another is in flight skips position capture but is never silently dropped', async () => {
+    const fixture = await createFixture();
+    const arrivedPosition = positionWithPts(800);
+    const laterLivePosition = positionWithPts(900);
+
+    // Hold the FIRST ingest open so the second update provably arrives while the first is still
+    // in flight. That is exactly the window in which the capture-at-receive guard refuses to
+    // capture a position: the live state may already cover updates that are not persisted yet.
+    let releaseFirstIngest: () => void = () => {};
+    const firstIngestGate = new Promise<void>((resolve) => {
+      releaseFirstIngest = resolve;
+    });
+    let sendCalls = 0;
+    const gatedBoss = {
+      send: vi.fn().mockImplementation(async () => {
+        sendCalls += 1;
+        if (sendCalls === 1) {
+          await firstIngestGate;
+        }
+        return 'mock-boss-job-id';
+      }),
+    } as unknown as PgBoss;
+
+    const manager = createManager(gatedBoss);
+    await manager.start();
+
+    const client = createdClients.get(fixture.districtId);
+    expect(client).toBeDefined();
+    client!.setUpdatePosition(arrivedPosition);
+
+    // 1. First update: captured at receive, then parked inside its ingest.
+    client!.pushUpdate(
+      createMtprotoChannelMessage({
+        chatChannelId: fixture.chatChannelId,
+        messageId: 8001,
+        userId: 667788,
+        text: 'First update, ingest in flight',
+      }),
+    );
+
+    // 2. Second update, delivered synchronously while the first is still in flight, and with the
+    //    live position already moved on. This is the capture-skip path: the guard refuses to
+    //    capture a position for it.
+    client!.setUpdatePosition(laterLivePosition);
+    client!.pushUpdate(
+      createMtprotoChannelMessage({
+        chatChannelId: fixture.chatChannelId,
+        messageId: 8002,
+        userId: 667788,
+        text: 'Second update, arrives during the first ingest',
+      }),
+    );
+
+    releaseFirstIngest();
+
+    // 3. The skipped update must still be ingested. Skipping the POSITION CAPTURE is the whole
+    //    point of the guard; skipping the UPDATE itself would be silent loss.
+    await waitFor(async () => readIntakeRecord(fixture.districtId, '8001'));
+    await waitFor(async () => readIntakeRecord(fixture.districtId, '8002'));
+
+    // 4. Only the first update owned a captured position, so the stored position describes that
+    //    message and never the later live state. Staying stale is the safe direction: the next
+    //    catch-up re-delivers, and the dedup index absorbs it, whereas advancing past an
+    //    unpersisted update would make Telegram skip it forever.
+    await waitFor(async () => (await readStoredPosition(fixture.districtId)) !== null);
+    expect(await readStoredPosition(fixture.districtId)).toBe(arrivedPosition);
+
+    await manager.stop();
+  });
+
+  function createAdapterWithLiveState(params: {
+    districtId: string;
+    initialUpdatePosition: string | null;
+    livePts: number;
+  }): { adapter: GramJsUserbotClient; refreshCalls: Array<{ pts: number }> } {
+    const refreshCalls: Array<{ pts: number }> = [];
+    const adapter = new GramJsUserbotClient({
+      districtId: params.districtId,
+      sessionString: 'test_session',
+      apiId: '12345',
+      apiHash: 'test_hash',
+      phoneNumber: '+998901234567',
+      initialUpdatePosition: params.initialUpdatePosition,
+    });
+
+    interface StubUpdateState {
+      pts: number;
+      qts: number;
+      date: number;
+      seq: number;
+    }
+
+    class StubTelegramClient {
+      readonly updateManager: {
+        state: StubUpdateState;
+        refreshFromState: (state: StubUpdateState) => void;
+      };
+
+      constructor(
+        _session: unknown,
+        _apiId: number,
+        _apiHash: string,
+        _options: Record<string, unknown>,
+      ) {
+        const refreshFromState = (state: StubUpdateState): void => {
+          refreshCalls.push({ pts: state.pts });
+          this.updateManager.state = state;
+        };
+        this.updateManager = {
+          state: { pts: params.livePts, qts: 1, date: 1000 + params.livePts, seq: 1 },
+          refreshFromState,
+        };
+      }
+
+      async connect(): Promise<void> {}
+      async disconnect(): Promise<void> {}
+      addEventHandler(): void {}
+      removeEventHandler(): void {}
+    }
+
+    const internals = adapter as unknown as { loadGramJs: () => Promise<unknown> };
+    internals.loadGramJs = async () => ({
+      TelegramClient: StubTelegramClient,
+      StringSession: class {
+        constructor(_value: string) {}
+      },
+      RawUpdateEvent: class {
+        constructor(_value: Record<string, unknown>) {}
+      },
+    });
+
+    return { adapter, refreshCalls };
+  }
+
+  it('PG-8: restoring a stored position never rewinds a newer live client state', async () => {
+    const { adapter, refreshCalls } = createAdapterWithLiveState({
+      districtId: 'dist_restore_older',
+      initialUpdatePosition: positionWithPts(100),
+      livePts: 200,
+    });
+
+    await adapter.connect();
+
+    expect(refreshCalls).toHaveLength(0);
+    expect(adapter.getUpdatePosition()).toBe(
+      JSON.stringify({ version: 'teleproto-v1', pts: 200, qts: 1, date: 1200, seq: 1 }),
+    );
+
+    await adapter.disconnect();
+  });
+
+  it('PG-9: a newer stored position is still restored', async () => {
+    const { adapter, refreshCalls } = createAdapterWithLiveState({
+      districtId: 'dist_restore_newer',
+      initialUpdatePosition: positionWithPts(300),
+      livePts: 200,
+    });
+
+    await adapter.connect();
+
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0]!.pts).toBe(300);
+    expect(adapter.getUpdatePosition()).toBe(
+      JSON.stringify({ version: 'teleproto-v1', pts: 300, qts: 1, date: 1300, seq: 1 }),
+    );
+
+    await adapter.disconnect();
+  });
+
+  it('PG-10: an unreadable stored position is ignored and the live client state is kept', async () => {
+    const { adapter, refreshCalls } = createAdapterWithLiveState({
+      districtId: 'dist_restore_unreadable',
+      initialUpdatePosition: '{"library":"gramjs","pts":9999}',
+      livePts: 200,
+    });
+
+    await adapter.connect();
+
+    expect(refreshCalls).toHaveLength(0);
+    expect(adapter.getUpdatePosition()).toBe(
+      JSON.stringify({ version: 'teleproto-v1', pts: 200, qts: 1, date: 1200, seq: 1 }),
+    );
+
+    await adapter.disconnect();
   });
 });

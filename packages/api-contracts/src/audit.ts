@@ -165,6 +165,7 @@ export const USERBOT_SESSION_AUDIT_ACTIONS = [
   'USERBOT_SESSION_DISABLED',
   'USERBOT_SESSION_ENABLED',
   'USERBOT_SESSION_STATUS_UPDATED',
+  'USERBOT_SESSION_REVOKED',
 ] as const;
 export const UserbotSessionAuditActionSchema = z.enum(USERBOT_SESSION_AUDIT_ACTIONS);
 export type UserbotSessionAuditAction = z.infer<typeof UserbotSessionAuditActionSchema>;
@@ -172,6 +173,7 @@ export type UserbotSessionAuditAction = z.infer<typeof UserbotSessionAuditAction
 export const USERBOT_AUDIT_ACTIONS = [
   ...USERBOT_SESSION_AUDIT_ACTIONS,
   'USERBOT_ABNORMAL_SIGNAL',
+  'USERBOT_UNRECOVERABLE_GAP_DETECTED',
 ] as const;
 export const UserbotAuditActionSchema = z.enum(USERBOT_AUDIT_ACTIONS);
 export type UserbotAuditAction = z.infer<typeof UserbotAuditActionSchema>;

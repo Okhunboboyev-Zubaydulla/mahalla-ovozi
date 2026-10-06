@@ -14,9 +14,11 @@ import {
   enableDistrictUserbotSession,
   disableDistrictUserbotSession,
   getDistrictUserbotSession,
+  updateUserbotSessionStatus,
 } from '../src/modules/userbot-session/index.js';
 import {
   UserbotConnectionManager,
+  type ClassifiedUserbotSignal,
   type UserbotClientPort,
   type UserbotClientFactory,
   type UserbotClientEvents,
@@ -47,6 +49,7 @@ class MockUserbotClient implements UserbotClientPort {
     error: [] as ((err: Error) => void)[],
     ban: [] as ((details?: { reason?: string; error?: Error }) => void)[],
     gap: [] as ((details?: { reason?: string; lastKnownPosition?: string | null; error?: Error }) => void)[],
+    signal: [] as ((signal: ClassifiedUserbotSignal) => void)[],
   };
 
   constructor(params: {
@@ -94,6 +97,9 @@ class MockUserbotClient implements UserbotClientPort {
       case 'ban':
         this.listeners.ban.push(listener);
         break;
+      case 'signal':
+        this.listeners.signal.push(listener);
+        break;
     }
   }
 
@@ -115,6 +121,9 @@ class MockUserbotClient implements UserbotClientPort {
       case 'ban':
         this.listeners.ban = this.listeners.ban.filter((l) => l !== listener);
         break;
+      case 'signal':
+        this.listeners.signal = this.listeners.signal.filter((l) => l !== listener);
+        break;
     }
   }
 
@@ -123,6 +132,7 @@ class MockUserbotClient implements UserbotClientPort {
   emit(event: 'message', update: unknown): void;
   emit(event: 'error', err: Error): void;
   emit(event: 'ban', details?: { reason?: string; error?: Error }): void;
+  emit(event: 'signal', signal: ClassifiedUserbotSignal): void;
   emit(event: keyof UserbotClientEvents, arg?: unknown): void {
     switch (event) {
       case 'reconnect':
@@ -144,6 +154,11 @@ class MockUserbotClient implements UserbotClientPort {
       case 'ban':
         if (arg === undefined || (typeof arg === 'object' && arg !== null)) {
           for (const fn of this.listeners.ban) fn(arg);
+        }
+        break;
+      case 'signal':
+        if (typeof arg === 'object' && arg !== null) {
+          for (const fn of this.listeners.signal) fn(arg as ClassifiedUserbotSignal);
         }
         break;
     }
@@ -178,6 +193,36 @@ class MockUserbotClient implements UserbotClientPort {
   simulateAccountDeleted(error?: Error): void {
     this.connected = false;
     this.emit('error', error ?? new Error('USER_DEACTIVATED'));
+  }
+
+  simulateSessionRevoked(error?: Error): void {
+    this.connected = false;
+    this.emit('error', error ?? new Error('AUTH_KEY_UNREGISTERED'));
+  }
+
+  /**
+   * Emits the typed `signal` event for a revocation, the way the real adapter does, without the
+   * accompanying `error` event. Used to drive the signal-only delivery path.
+   */
+  simulateSessionRevokedSignal(reason: string = 'AUTH_KEY_UNREGISTERED'): void {
+    this.connected = false;
+    this.emit('signal', {
+      category: 'SESSION_REVOKED',
+      reason,
+      error: new Error(reason),
+    });
+  }
+
+  /**
+   * Reproduces the real adapter's connect-failure delivery for one underlying revocation: it
+   * emits the typed `signal` event and then also emits `error` for the same failure. The listener
+   * dispatch of the mock is synchronous, matching the ordering of the adapter's own `emit`.
+   */
+  simulateSessionRevokedSignalAndError(reason: string = 'AUTH_KEY_UNREGISTERED'): void {
+    this.connected = false;
+    const errorObj = new Error(reason);
+    this.emit('signal', { category: 'SESSION_REVOKED', reason, error: errorObj });
+    this.emit('error', errorObj);
   }
 }
 
@@ -238,6 +283,34 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
       status: 'ACTIVE',
     });
     return districtId;
+  }
+
+  async function countRevokedIssues(districtId: string): Promise<number> {
+    const rows = await db
+      .select()
+      .from(operationalIssues)
+      .where(
+        and(
+          eq(operationalIssues.districtId, districtId),
+          eq(operationalIssues.component, 'USERBOT'),
+          eq(operationalIssues.issueCategory, 'USERBOT_SESSION_REVOKED'),
+          eq(operationalIssues.status, 'ACTIVE'),
+        ),
+      );
+    return rows.length;
+  }
+
+  async function countRevocationAudits(districtId: string): Promise<number> {
+    const rows = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.districtId, districtId),
+          eq(auditEvents.action, 'USERBOT_SESSION_REVOKED'),
+        ),
+      );
+    return rows.length;
   }
 
   it('Test 1: Service queries DB and connects only ACTIVE sessions (ignores PENDING, DISABLED, BANNED)', async () => {
@@ -645,6 +718,324 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
     // Wait brief time and assert no further connect calls
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(client.connectCalls).toBe(1);
+
+    await manager.stop();
+  });
+
+  it('Test 7b: SESSION_REVOKED terminates the session: no reconnection, DB status PENDING, District-scoped Operational Issue, and repeat delivery is an idempotent no-op', async () => {
+    const districtId = await createTestDistrict('SessionRevoked');
+
+    await createDistrictUserbotSession(db, {
+      districtId,
+      phoneNumber: '+998906770001',
+      apiId: '6670001',
+      sessionString: 'session_revoked_token',
+    });
+    await enableDistrictUserbotSession(db, districtId);
+
+    const manager = new UserbotConnectionManager({
+      db,
+      clientFactory: mockClientFactory,
+      reconnectBaseDelayMs: 20,
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+
+    await manager.start();
+
+    const client = createdClients.get(districtId)!;
+    expect(client).toBeDefined();
+    expect(client.connectCalls).toBe(1);
+
+    // Trigger session revocation (Telegram invalidated the session / auth key unregistered)
+    client.simulateSessionRevoked(new Error('AUTH_KEY_UNREGISTERED'));
+
+    // Wait for DB session status to transition to PENDING
+    await waitFor(async () => {
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      return row?.status === 'PENDING';
+    }, 2000, 25);
+
+    // (b) Assert DB session status is PENDING (requires re-login)
+    const [row] = await db
+      .select()
+      .from(districtTelegramUserbotSessions)
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+    expect(row?.status).toBe('PENDING');
+
+    // Assert audit event recorded with the new action literal
+    const [audit] = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.districtId, districtId),
+          eq(auditEvents.action, 'USERBOT_SESSION_REVOKED'),
+        ),
+      );
+    expect(audit).toBeDefined();
+    expect(audit!.action).toBe('USERBOT_SESSION_REVOKED');
+
+    // (c) Assert exactly one active Operational Issue exists with the expected identity
+    const firstIssues = await db
+      .select()
+      .from(operationalIssues)
+      .where(
+        and(
+          eq(operationalIssues.districtId, districtId),
+          eq(operationalIssues.component, 'USERBOT'),
+          eq(operationalIssues.issueCategory, 'USERBOT_SESSION_REVOKED'),
+          eq(operationalIssues.status, 'ACTIVE'),
+        ),
+      );
+    expect(firstIssues).toHaveLength(1);
+    const issue = firstIssues[0]!;
+    expect(issue.scope).toBe('DISTRICT');
+    expect(issue.districtId).toBe(districtId);
+    expect(issue.logicalKey).toBe(`DISTRICT:${districtId}:USERBOT:USERBOT_SESSION_REVOKED`);
+    expect(issue.severity).toBe('Critical');
+    expect(issue.healthStatus).toBe('Unavailable');
+    expect(issue.status).toBe('ACTIVE');
+
+    // Assert manager marks the district as session-revoked
+    expect(manager.isDistrictSessionRevoked(districtId)).toBe(true);
+
+    // (a) Assert no reconnection is rescheduled after a revoked signal
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(client.connectCalls).toBe(1);
+
+    // (d) Repeat delivery of the same revoked signal must be an idempotent no-op:
+    // no second Operational Issue, no second audit event, and no restarted reconnection.
+    client.simulateSessionRevoked(new Error('AUTH_KEY_UNREGISTERED'));
+    await manager.handleSignal(
+      districtId,
+      { category: 'SESSION_REVOKED', reason: 'AUTH_KEY_UNREGISTERED' },
+      { isConnected: false },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    const afterRepeatIssues = await db
+      .select()
+      .from(operationalIssues)
+      .where(
+        and(
+          eq(operationalIssues.districtId, districtId),
+          eq(operationalIssues.component, 'USERBOT'),
+          eq(operationalIssues.issueCategory, 'USERBOT_SESSION_REVOKED'),
+          eq(operationalIssues.status, 'ACTIVE'),
+        ),
+      );
+    expect(afterRepeatIssues).toHaveLength(1);
+
+    const afterRepeatAudits = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.districtId, districtId),
+          eq(auditEvents.action, 'USERBOT_SESSION_REVOKED'),
+        ),
+      );
+    expect(afterRepeatAudits).toHaveLength(1);
+
+    const [rowAfterRepeat] = await db
+      .select()
+      .from(districtTelegramUserbotSessions)
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+    expect(rowAfterRepeat?.status).toBe('PENDING');
+    expect(client.connectCalls).toBe(1);
+
+    await manager.stop();
+  });
+
+  it('Test 7c: a revocation delivered through the adapter signal event path terminates the session exactly once, and the real signal+error dual-emit adds no duplicate issue, audit or reconnection', async () => {
+    const districtId = await createTestDistrict('SessionRevokedSignalPath');
+
+    await createDistrictUserbotSession(db, {
+      districtId,
+      phoneNumber: '+998906770101',
+      apiId: '6670101',
+      sessionString: 'session_revoked_signal_token',
+    });
+    await enableDistrictUserbotSession(db, districtId);
+
+    const manager = new UserbotConnectionManager({
+      db,
+      clientFactory: mockClientFactory,
+      reconnectBaseDelayMs: 20,
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+
+    await manager.start();
+
+    const client = createdClients.get(districtId)!;
+    expect(client.connectCalls).toBe(1);
+
+    // Deliver the revocation the way the real adapter does on a connect failure: the typed
+    // `signal` event first, then the plain `error` event for the SAME underlying failure. The
+    // mock only carries the signal listener because the manager registers one.
+    client.simulateSessionRevokedSignalAndError('AUTH_KEY_UNREGISTERED');
+
+    await waitFor(async () => {
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      return row?.status === 'PENDING';
+    }, 2000, 25);
+
+    // Let both deliveries of the dual-emit, plus any reconnection the category could schedule,
+    // settle before counting side effects.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Exactly one issue and one audit event survived the signal+error dual delivery.
+    expect(await countRevokedIssues(districtId)).toBe(1);
+    expect(await countRevocationAudits(districtId)).toBe(1);
+
+    // The signal path drove the handler: the district is guarded, deregistered and disconnected.
+    expect(manager.isDistrictSessionRevoked(districtId)).toBe(true);
+    expect(manager.isDistrictConnected(districtId)).toBe(false);
+    expect(manager.getManagedDistricts()).not.toContain(districtId);
+
+    // SESSION_REVOKED never schedules a reconnection, under either delivery.
+    expect(client.connectCalls).toBe(1);
+
+    await manager.stop();
+  });
+
+  it('Test 7d: a re-established session clears the revocation guard so the worker reconnects without a restart, while an invalid session keeps reconnection blocked', async () => {
+    const districtId = await createTestDistrict('SessionRevokedRecovery');
+
+    await createDistrictUserbotSession(db, {
+      districtId,
+      phoneNumber: '+998906770201',
+      apiId: '6670201',
+      sessionString: 'session_revoked_recovery_token',
+    });
+    await enableDistrictUserbotSession(db, districtId);
+
+    const manager = new UserbotConnectionManager({
+      db,
+      clientFactory: mockClientFactory,
+      reconnectBaseDelayMs: 20,
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+
+    await manager.start();
+
+    const firstClient = createdClients.get(districtId)!;
+    expect(firstClient.connectCalls).toBe(1);
+
+    firstClient.simulateSessionRevoked(new Error('AUTH_KEY_UNREGISTERED'));
+
+    // The guard is set before the handler's DB write, so wait on the persisted state instead: it
+    // is the stored session, not the in-memory guard, that the recovery rule keys on.
+    await waitFor(async () => {
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      return row?.status === 'PENDING';
+    }, 2000, 25);
+
+    // NEGATIVE: the stored session is still invalid (the handler left it PENDING and no re-login
+    // has happened), so the guard must keep blocking and a sync cycle must not reconnect.
+    expect(manager.isDistrictSessionRevoked(districtId)).toBe(true);
+
+    await manager.syncSessions();
+
+    expect(manager.isDistrictSessionRevoked(districtId)).toBe(true);
+    expect(manager.getManagedDistricts()).not.toContain(districtId);
+    expect(firstClient.connectCalls).toBe(1);
+
+    // Re-establish the session the way a successful CLI re-login/bootstrap does: a complete
+    // credential envelope written together with a transition back to ACTIVE.
+    await updateUserbotSessionStatus(db, districtId, {
+      status: 'ACTIVE',
+      sessionString: 'session_relogin_complete',
+    });
+
+    // The worker's own polling path observes the re-established session and clears the guard.
+    await manager.syncSessions();
+
+    expect(manager.isDistrictSessionRevoked(districtId)).toBe(false);
+    expect(manager.getManagedDistricts()).toContain(districtId);
+
+    const reconnectedClient = createdClients.get(districtId)!;
+    expect(reconnectedClient).not.toBe(firstClient);
+    expect(reconnectedClient.connectCalls).toBe(1);
+
+    await manager.stop();
+  });
+
+  it('Test 7e: a revocation occurring after a successful recovery raises its operational issue exactly once, with no duplicate audit event', async () => {
+    const districtId = await createTestDistrict('SessionRevokedAfterRecovery');
+
+    await createDistrictUserbotSession(db, {
+      districtId,
+      phoneNumber: '+998906770301',
+      apiId: '6670301',
+      sessionString: 'session_revoked_after_recovery_token',
+    });
+    await enableDistrictUserbotSession(db, districtId);
+
+    const manager = new UserbotConnectionManager({
+      db,
+      clientFactory: mockClientFactory,
+      reconnectBaseDelayMs: 20,
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+
+    await manager.start();
+
+    // First revocation.
+    createdClients.get(districtId)!.simulateSessionRevoked(new Error('AUTH_KEY_UNREGISTERED'));
+    await waitFor(async () => {
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      return row?.status === 'PENDING';
+    }, 2000, 25);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(await countRevokedIssues(districtId)).toBe(1);
+    const auditsAfterFirstRevocation = await countRevocationAudits(districtId);
+    expect(auditsAfterFirstRevocation).toBe(1);
+
+    // Operator repairs the session; the worker observes it on its polling path and unblocks.
+    await updateUserbotSessionStatus(db, districtId, {
+      status: 'ACTIVE',
+      sessionString: 'session_relogin_after_recovery',
+    });
+    await manager.syncSessions();
+    expect(manager.isDistrictSessionRevoked(districtId)).toBe(false);
+
+    // The first issue is still open. A fresh revocation for the same district produces the same
+    // logical key, so it must upsert onto that issue rather than open a second one. It is driven
+    // through the real dual-emit so a double delivery cannot double-count either signal.
+    createdClients.get(districtId)!.simulateSessionRevokedSignalAndError('AUTH_KEY_UNREGISTERED');
+
+    await waitFor(async () => {
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      return row?.status === 'PENDING';
+    }, 2000, 25);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(manager.isDistrictSessionRevoked(districtId)).toBe(true);
+    // Still exactly one ACTIVE issue: the second revocation upserted onto the same logical key.
+    expect(await countRevokedIssues(districtId)).toBe(1);
+    // Exactly one audit event per revocation occurrence, despite the signal+error dual delivery.
+    expect(await countRevocationAudits(districtId)).toBe(auditsAfterFirstRevocation + 1);
 
     await manager.stop();
   });
@@ -1496,7 +1887,11 @@ describe('Userbot Service & Connection Manager Integration Tests (Ticket 07)', (
         .from(operationalIssues)
         .where(eq(operationalIssues.districtId, distA));
       expect(issuesA.length).toBeGreaterThanOrEqual(1);
-      expect(issuesA[0].logicalKey).toBe(`DISTRICT:${distA}:USERBOT:FLOOD_WAIT`);
+      const floodWaitIssue = issuesA[0];
+      if (!floodWaitIssue) {
+        throw new Error('Expected at least one operational issue for District A');
+      }
+      expect(floodWaitIssue.logicalKey).toBe(`DISTRICT:${distA}:USERBOT:FLOOD_WAIT`);
 
       // District B has ZERO operational issues
       const issuesB = await db

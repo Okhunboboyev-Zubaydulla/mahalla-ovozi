@@ -56,10 +56,14 @@ export function isSerializedError(val: unknown): val is SerializedError {
   );
 }
 
-export function serializeError(
+export function serializeError(err: unknown): SerializedError {
+  return serializeErrorInternal(err, new Set<unknown>(), 0);
+}
+
+function serializeErrorInternal(
   err: unknown,
-  seen: Set<unknown> = new Set(),
-  depth: number = 0,
+  seen: Set<unknown>,
+  depth: number,
 ): SerializedError {
   if (typeof err === 'object' && err !== null) {
     seen.add(err);
@@ -111,7 +115,7 @@ export function serializeError(
       } else if (depth >= MAX_CAUSE_DEPTH) {
         serialized.cause = '[MaxDepthExceeded]';
       } else if (cause instanceof Error) {
-        serialized.cause = serializeError(cause, seen, depth + 1);
+        serialized.cause = serializeErrorInternal(cause, seen, depth + 1);
       } else if (typeof cause === 'string') {
         serialized.cause = cause;
       } else if (typeof cause === 'object' && cause !== null) {

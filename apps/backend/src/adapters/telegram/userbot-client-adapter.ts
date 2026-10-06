@@ -21,6 +21,12 @@ import {
   classifyTelegramSignal,
   toUserbotSignalError,
 } from './telegram-signal-classifier.js';
+import {
+  parseUserbotUpdatePosition,
+  isNewerUserbotUpdatePosition,
+  TELEPROTO_POSITION_VERSION,
+  type UserbotUpdatePosition,
+} from '../../modules/userbot/update-position.js';
 
 interface GramJsClientStub {
   connect(): Promise<void>;
@@ -42,6 +48,31 @@ interface GramJsClientStub {
 interface InboundUpdateSubscription {
   callback: (update: unknown) => void;
   event: unknown;
+}
+
+/**
+ * The payload shape the `gap` event carries. GramJS hands this event an untyped object, so the
+ * adapter narrows it explicitly instead of casting: only the three documented optional fields are
+ * read downstream, and everything else on the object is irrelevant to the gap handler.
+ */
+type UserbotGapDetails = {
+  reason?: string;
+  lastKnownPosition?: string | null;
+  error?: Error;
+};
+
+function isUserbotGapDetails(arg: unknown): arg is UserbotGapDetails {
+  if (typeof arg !== 'object' || arg === null) {
+    return false;
+  }
+  const candidate = arg as Record<string, unknown>;
+  return (
+    (candidate.reason === undefined || typeof candidate.reason === 'string') &&
+    (candidate.lastKnownPosition === undefined ||
+      candidate.lastKnownPosition === null ||
+      typeof candidate.lastKnownPosition === 'string') &&
+    (candidate.error === undefined || candidate.error instanceof Error)
+  );
 }
 
 export type _AssertPassiveOnlyAdapter = _AssertPassiveOnlyPort;
@@ -113,18 +144,30 @@ export class GramJsUserbotClient implements UserbotClientPort {
         },
       );
 
-      if (this.initialUpdatePosition && typeof tgClient.updateManager?.refreshFromState === 'function') {
-        try {
-          const parsed = JSON.parse(this.initialUpdatePosition);
-          if (parsed && typeof parsed.pts === 'number') {
-            tgClient.updateManager.refreshFromState(parsed);
-          }
-        } catch (err: unknown) {
-          logger.warn(
-            { districtId: this.districtId, err },
-            'Failed to restore update position from initialUpdatePosition',
-          );
-        }
+      const storedPosition = parseUserbotUpdatePosition(this.initialUpdatePosition);
+      const livePosition = this.readLiveUpdatePosition(tgClient);
+      if (
+        storedPosition !== null &&
+        isNewerUserbotUpdatePosition(livePosition, storedPosition) &&
+        typeof tgClient.updateManager?.refreshFromState === 'function'
+      ) {
+        tgClient.updateManager.refreshFromState(storedPosition);
+      } else if (storedPosition !== null && livePosition !== null) {
+        logger.warn(
+          {
+            districtId: this.districtId,
+            storedPts: storedPosition.pts,
+            livePts: livePosition.pts,
+          },
+          'Stored userbot update position is not newer than the live client state; kept the live state',
+        );
+      }
+
+      if (this.initialUpdatePosition !== null && storedPosition === null) {
+        logger.warn(
+          { districtId: this.districtId, initialUpdatePosition: this.initialUpdatePosition },
+          'Ignored an unreadable stored userbot update position during restore',
+        );
       }
 
       await tgClient.connect();
@@ -247,17 +290,39 @@ export class GramJsUserbotClient implements UserbotClientPort {
   }
 
   getUpdatePosition(): string | null {
-    const state = this.client?.updateManager?.state;
-    if (!state || typeof state.pts !== 'number') {
+    const position = this.readLiveUpdatePosition(this.client);
+    if (position === null) {
       return null;
     }
-    return JSON.stringify({
-      version: 'teleproto-v1',
+    return JSON.stringify(position);
+  }
+
+  /**
+   * Reads the client's live global update state as a comparable position, or null when the
+   * client has no state yet or the state is missing one of its four legs. A partial state is
+   * rejected rather than defaulted: a fabricated qts, date or seq would be indistinguishable
+   * from a real advance and could cover updates that were never delivered.
+   */
+  private readLiveUpdatePosition(client: GramJsClientStub | null): UserbotUpdatePosition | null {
+    const state = client?.updateManager?.state;
+    if (!state) {
+      return null;
+    }
+    if (
+      typeof state.pts !== 'number' ||
+      typeof state.qts !== 'number' ||
+      typeof state.date !== 'number' ||
+      typeof state.seq !== 'number'
+    ) {
+      return null;
+    }
+    return {
+      version: TELEPROTO_POSITION_VERSION,
       pts: state.pts,
       qts: state.qts,
       date: state.date,
       seq: state.seq,
-    });
+    };
   }
 
   on<E extends keyof UserbotClientEvents>(event: E, listener: UserbotClientEvents[E]): void;
@@ -346,8 +411,8 @@ export class GramJsUserbotClient implements UserbotClientPort {
           }
           break;
         case 'gap':
-          if (typeof arg === 'object' && arg !== null) {
-            for (const fn of this.listeners.gap) fn(arg as any);
+          if (arg === undefined || isUserbotGapDetails(arg)) {
+            for (const fn of this.listeners.gap) fn(arg);
           }
           break;
         case 'signal':

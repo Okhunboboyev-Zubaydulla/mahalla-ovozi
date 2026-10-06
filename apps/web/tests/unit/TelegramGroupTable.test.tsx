@@ -153,8 +153,8 @@ describe('TelegramGroupTable Component Tests', () => {
     await waitFor(() => {
       expect(screen.getByText('BOT_API')).toBeDefined();
       expect(screen.getByText('USERBOT')).toBeDefined();
-      expect(screen.getByText('Фаол (Чекланган)')).toBeDefined();
-      expect(screen.getByText('Талаб этилмайди (Тўлиқ қабул)')).toBeDefined();
+      expect(screen.getByTestId('privacy-mode-restricted').textContent).toContain('Фаол (Чекланган)');
+      expect(screen.getByTestId('privacy-mode-userbot').textContent).toContain('Талаб этилмайди (Тўлиқ қабул)');
     });
   });
 });

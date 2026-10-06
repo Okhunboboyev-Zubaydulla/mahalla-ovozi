@@ -89,7 +89,23 @@ function isTelegramClient(value: unknown): boolean {
   return false;
 }
 
-function sanitizeValue(value: unknown, activeStack: Set<unknown>): unknown {
+/**
+ * Maximum object/array nesting the sanitizer will walk before it stops descending. A raw update
+ * arrives from a third-party library and is not shape-checked upstream, so a pathologically deep
+ * (but acyclic) payload - or one whose cycle only closes above the walk's entry point - would
+ * otherwise recurse until the call stack overflows and takes the whole userbot process down.
+ * Payloads deeper than this are truncated to the cap rather than rejected: the value is only
+ * diagnostic raw evidence, so a partial tail is strictly better than a crash.
+ */
+export const MAX_RAW_PAYLOAD_DEPTH = 32;
+
+/**
+ * Marker substituted for any node the sanitizer refuses to descend into because the depth cap was
+ * reached. It is a plain string so the result stays JSON-serializable.
+ */
+export const MAX_RAW_PAYLOAD_DEPTH_MARKER = '[Truncated: max depth exceeded]';
+
+function sanitizeValue(value: unknown, activeStack: Set<unknown>, depth: number): unknown {
   if (value === null || value === undefined) {
     return value;
   }
@@ -123,6 +139,10 @@ function sanitizeValue(value: unknown, activeStack: Set<unknown>): unknown {
     return undefined;
   }
 
+  if (depth >= MAX_RAW_PAYLOAD_DEPTH) {
+    return MAX_RAW_PAYLOAD_DEPTH_MARKER;
+  }
+
   if (Array.isArray(value)) {
     activeStack.add(value);
     try {
@@ -131,7 +151,7 @@ function sanitizeValue(value: unknown, activeStack: Set<unknown>): unknown {
         if (isTelegramClient(item)) {
           continue;
         }
-        const sanitizedItem = sanitizeValue(item, activeStack);
+        const sanitizedItem = sanitizeValue(item, activeStack, depth + 1);
         if (sanitizedItem !== undefined) {
           list.push(sanitizedItem);
         }
@@ -162,7 +182,7 @@ function sanitizeValue(value: unknown, activeStack: Set<unknown>): unknown {
       if (isTelegramClient(childVal)) {
         continue;
       }
-      const sanitizedChild = sanitizeValue(childVal, activeStack);
+      const sanitizedChild = sanitizeValue(childVal, activeStack, depth + 1);
       if (sanitizedChild !== undefined) {
         result[key] = sanitizedChild;
       }
@@ -176,6 +196,9 @@ function sanitizeValue(value: unknown, activeStack: Set<unknown>): unknown {
 /**
  * Strips `_client`, `client`, and any cyclic references from raw update payloads,
  * returning a clean, JSON-serializable plain object/array.
+ *
+ * The walk is bounded by MAX_RAW_PAYLOAD_DEPTH so a pathologically deep payload cannot exhaust
+ * the call stack. Nodes below the cap are replaced by MAX_RAW_PAYLOAD_DEPTH_MARKER.
  */
 export function sanitizeRawUpdatePayload(update: unknown): unknown {
   if (update === null || update === undefined) {
@@ -190,7 +213,7 @@ export function sanitizeRawUpdatePayload(update: unknown): unknown {
   }
 
   const activeStack = new Set<unknown>();
-  const sanitized = sanitizeValue(update, activeStack);
+  const sanitized = sanitizeValue(update, activeStack, 0);
   if (sanitized === undefined) {
     return {};
   }

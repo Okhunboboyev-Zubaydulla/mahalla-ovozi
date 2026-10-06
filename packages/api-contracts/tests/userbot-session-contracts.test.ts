@@ -116,7 +116,7 @@ describe('Userbot Session Contracts & Boundary Validation', () => {
   });
 
   describe('USERBOT_SESSION_AUDIT_ACTIONS & UserbotSessionAuditActionSchema', () => {
-    it('defines exactly the 7 canonical session lifecycle action names', () => {
+    it('defines exactly the 8 canonical session lifecycle action names', () => {
       expect(USERBOT_SESSION_AUDIT_ACTIONS).toEqual([
         'USERBOT_SESSION_CREATED',
         'USERBOT_SESSION_ACTIVATED',
@@ -125,6 +125,7 @@ describe('Userbot Session Contracts & Boundary Validation', () => {
         'USERBOT_SESSION_DISABLED',
         'USERBOT_SESSION_ENABLED',
         'USERBOT_SESSION_STATUS_UPDATED',
+        'USERBOT_SESSION_REVOKED',
       ]);
     });
 
@@ -138,10 +139,11 @@ describe('Userbot Session Contracts & Boundary Validation', () => {
   });
 
   describe('USERBOT_AUDIT_ACTIONS & UserbotAuditActionSchema (Ticket 21 AC-9)', () => {
-    it('defines the 8 userbot audit actions including USERBOT_ABNORMAL_SIGNAL', () => {
+    it('defines the 10 userbot audit actions including USERBOT_ABNORMAL_SIGNAL and USERBOT_UNRECOVERABLE_GAP_DETECTED', () => {
       expect(USERBOT_AUDIT_ACTIONS).toEqual([
         ...USERBOT_SESSION_AUDIT_ACTIONS,
         'USERBOT_ABNORMAL_SIGNAL',
+        'USERBOT_UNRECOVERABLE_GAP_DETECTED',
       ]);
     });
 

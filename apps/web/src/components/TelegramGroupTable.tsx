@@ -170,15 +170,29 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
       width: '20%',
       render: (disabled: boolean, record: TelegramGroupMapping) =>
         record.transport === 'USERBOT' ? (
-          <Tag color="default" style={{ padding: '2px 8px', fontSize: '12px' }}>
+          <Tag
+            data-testid="privacy-mode-userbot"
+            color="default"
+            style={{ padding: '2px 8px', fontSize: '12px' }}
+          >
             Талаб этилмайди (Тўлиқ қабул)
           </Tag>
         ) : disabled ? (
-          <Tag color="success" icon={<SafetyOutlined />} style={{ padding: '2px 8px', fontSize: '12px' }}>
+          <Tag
+            data-testid="privacy-mode-disabled"
+            color="success"
+            icon={<SafetyOutlined />}
+            style={{ padding: '2px 8px', fontSize: '12px' }}
+          >
             Ўчирилган (Тўлиқ қабул)
           </Tag>
         ) : (
-          <Tag color="volcano" icon={<SafetyOutlined />} style={{ padding: '2px 8px', fontSize: '12px' }}>
+          <Tag
+            data-testid="privacy-mode-restricted"
+            color="volcano"
+            icon={<SafetyOutlined />}
+            style={{ padding: '2px 8px', fontSize: '12px' }}
+          >
             Фаол (Чекланган)
           </Tag>
         ),

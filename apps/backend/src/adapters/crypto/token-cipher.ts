@@ -20,7 +20,7 @@ export type KeyOverride = string | Record<string, string>;
 export const DEFAULT_KEY_VERSION = 'v1';
 
 export class MissingEncryptionKeyError extends Error {
-  constructor(message: string = 'ENCRYPTION_KEY must be configured (missing environment variable: ENCRYPTION_KEY)') {
+  constructor(message: string) {
     super(message);
     this.name = 'MissingEncryptionKeyError';
   }
@@ -35,7 +35,7 @@ export class UnresolvableKeyVersionError extends Error {
 }
 
 export class InvalidKeyLengthError extends Error {
-  constructor(length: number, envVar: string = 'ENCRYPTION_KEY') {
+  constructor(length: number, envVar: string) {
     super(`Invalid ${envVar} length: must resolve to 32 bytes (256 bits), received ${length} bytes`);
     this.name = 'InvalidKeyLengthError';
   }
@@ -57,7 +57,7 @@ export function getActiveKeyVersion(): string {
  * - 44-character Base64 string (32 bytes)
  * - Exact 32-byte UTF-8 string
  */
-export function normalizeKey(rawKey: string, envVarName: string = 'ENCRYPTION_KEY'): Buffer {
+export function normalizeKey(rawKey: string, envVarName: string): Buffer {
   const trimmed = rawKey.trim();
   let buffer: Buffer;
   if (/^[0-9a-fA-F]{64}$/.test(trimmed)) {

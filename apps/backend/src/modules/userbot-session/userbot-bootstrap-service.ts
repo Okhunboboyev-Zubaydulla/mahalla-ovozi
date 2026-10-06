@@ -13,11 +13,14 @@ import {
   UserbotSessionNotFoundError,
   UserbotSessionDisabledError,
   SessionBannedError,
+  assertApiHashEnvelopeIntact,
+  narrowApiHashEnvelope,
 } from './userbot-session-service.js';
 import {
   PhoneNumberSchema,
   ApiIdSchema,
   ApiHashSchema,
+  type UserbotAuditAction,
 } from '@mahalla-ovozi/api-contracts';
 import {
   UserbotAuthClientPort,
@@ -89,9 +92,22 @@ export async function bootstrapUserbotSession(
     throw new SessionBannedError(districtId);
   }
 
-  // 3. Resolve API credentials (decrypt from envelope if present, or fallback to params)
+  // 3. Resolve API credentials (decrypt from envelope if present, or fallback to params).
+  //
+  // A PARTIAL apiHash envelope is rejected explicitly first. Without this guard it matches neither
+  // branch below (the envelope test is compound, the fallback tests only a passed-in parameter),
+  // so rawApiHash would stay null and the caller would receive a misleading credential-validation
+  // error instead of a corruption signal for the stored row.
+  //
+  // Deliberately NOT asserted here: the sessionString envelope. Bootstrap's purpose is to
+  // (re)establish that credential and it overwrites the triple wholesale, so a partial session row
+  // is exactly what a re-login is expected to repair rather than a reason to refuse.
+  assertApiHashEnvelopeIntact(session);
+
   let rawApiHash: string | null = null;
-  if (session.apiHashEncrypted && session.apiHashIv && session.apiHashTag) {
+  const storedApiHashEnvelope = narrowApiHashEnvelope(session);
+
+  if (storedApiHashEnvelope) {
     if (!session.apiHashKeyVersion || session.apiHashKeyVersion.trim().length === 0) {
       throw new Error(
         `Userbot session row '${session.id}' (district '${session.districtId}') has encrypted apiHash but a null or missing apiHashKeyVersion`,
@@ -99,9 +115,9 @@ export async function bootstrapUserbotSession(
     }
     rawApiHash = decryptToken(
       {
-        encryptedToken: session.apiHashEncrypted,
-        tokenIv: session.apiHashIv,
-        tokenTag: session.apiHashTag,
+        encryptedToken: storedApiHashEnvelope.ciphertext,
+        tokenIv: storedApiHashEnvelope.iv,
+        tokenTag: storedApiHashEnvelope.tag,
         tokenKeyVersion: session.apiHashKeyVersion,
       },
       params.customEncryptionKey,
@@ -240,7 +256,7 @@ export async function bootstrapUserbotSession(
         districtId,
         actorId: params.actorId || null,
         actorRole: params.actorRole ?? 'PRODUCT_OWNER',
-        action: 'USERBOT_SESSION_ACTIVATED',
+        action: 'USERBOT_SESSION_ACTIVATED' satisfies UserbotAuditAction,
         metadata: {
           sessionId: session.id,
           status: 'ACTIVE',

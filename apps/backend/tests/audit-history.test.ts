@@ -455,6 +455,50 @@ describe('Story 4.4: Backend Audit History Database & HTTP Integration Tests', (
         ),
       ).toBe(true);
     });
+
+    it('returns USERBOT_UNRECOVERABLE_GAP_DETECTED under the TELEGRAM_INTEGRATION category filter and excludes it from OPERATIONAL_LIFECYCLE', async () => {
+      const gapEventId = `aud_test_userbot_gap_${Date.now()}`;
+      await db.insert(auditEvents).values({
+        id: gapEventId,
+        districtId: districtAId,
+        actorId: 'system:userbot-manager',
+        actorRole: 'SYSTEM',
+        action: 'USERBOT_UNRECOVERABLE_GAP_DETECTED',
+        ipAddress: null,
+        userAgent: null,
+        metadata: { districtId: districtAId, reason: 'update gap' },
+        createdAt: new Date(),
+      });
+
+      const telegramRes = await server.inject({
+        method: 'GET',
+        url: `/api/v1/audit/events?category=TELEGRAM_INTEGRATION&districtId=${districtAId}`,
+        headers: {
+          cookie: poCookie,
+          ...SAME_ORIGIN_HEADERS,
+        },
+      });
+      expect(telegramRes.statusCode).toBe(200);
+      const telegramJson = JSON.parse(telegramRes.payload) as AuditHistoryPage;
+      const found = telegramJson.items.find((i) => i.id === gapEventId);
+      expect(found).toBeDefined();
+      expect(found!.recordType).toBe('AUDIT_EVENT');
+      if (found && found.recordType === 'AUDIT_EVENT') {
+        expect(found.category).toBe('TELEGRAM_INTEGRATION');
+      }
+
+      const operationalRes = await server.inject({
+        method: 'GET',
+        url: `/api/v1/audit/events?category=OPERATIONAL_LIFECYCLE&districtId=${districtAId}`,
+        headers: {
+          cookie: poCookie,
+          ...SAME_ORIGIN_HEADERS,
+        },
+      });
+      expect(operationalRes.statusCode).toBe(200);
+      const operationalJson = JSON.parse(operationalRes.payload) as AuditHistoryPage;
+      expect(operationalJson.items.some((i) => i.id === gapEventId)).toBe(false);
+    });
   });
 
   describe('4. Asia/Tashkent Date Range Filtering (AC 2, AC 7)', () => {

@@ -46,8 +46,8 @@ Hexagonal isolation of MTProto dependencies has been significantly strengthened 
 
 ### 3. Server-Side Revocation & Kill Switch Semantics
 The kill switch (`POST /api/v1/districts/:districtId/userbot-session/disable`) has been upgraded from a passive local disconnect to active server-side revocation:
-- Setting status to `DISABLED` executes `client.logOut()` via MTProto, invalidating the session authorization key directly on Telegram's infrastructure.
-- All stored ciphertext blobs (`session_encrypted`, `api_hash_encrypted`, `session_iv`, `session_tag`) are permanently wiped from the database.
+- Setting status to `DISABLED` performs server-side revocation through an injected session revoker (`resolvedRevoker`, defaulting to `defaultTelegramSessionRevoker`). The default implementation loads the MTProto library, constructs a client from the stored session string and calls `client.logOut()`, invalidating the session authorization key directly on Telegram's infrastructure. A client exposing no `logOut` method, an unloadable MTProto library, or an already-revoked session degrades to a local-only disable rather than failing the transition.
+- The stored session ciphertext blobs (`session_encrypted`, `session_iv`, `session_tag`) are permanently wiped from the database. The API credential envelope (`api_hash_encrypted`, `api_hash_iv`, `api_hash_tag`) is deliberately preserved so the District can be re-authenticated without re-procuring the Telegram application credentials.
 - Re-enabling a previously disabled session transitions status to `PENDING` (not `ACTIVE`) because revocation permanently destroyed authorization keys; resuming transport requires fresh interactive authentication via the VPS CLI.
 
 ### 4. Banned Account Recovery Reality

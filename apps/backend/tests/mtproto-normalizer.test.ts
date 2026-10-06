@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeMtprotoUpdate,
   sanitizeRawUpdatePayload,
+  MAX_RAW_PAYLOAD_DEPTH,
+  MAX_RAW_PAYLOAD_DEPTH_MARKER,
 } from '../src/adapters/telegram/mtproto-normalizer.js';
 import {
   filterTelegramMessage,
@@ -633,6 +635,31 @@ describe('MTProto Normalizer (Ticket 15 - Pure DB-Free Unit Tests)', () => {
         expect((rawPayload.message as Record<string, unknown>)._client).toBeUndefined();
         expect(() => JSON.stringify(result.envelope.rawPayload)).not.toThrow();
       }
+    });
+
+    it('bounds the walk at MAX_RAW_PAYLOAD_DEPTH so a pathologically deep payload cannot exhaust the stack', () => {
+      // Far deeper than any real update and far deeper than the call stack can hold unbounded.
+      const overDeepDepth = 20000;
+      let deep: Record<string, unknown> = { leaf: 'bottom' };
+      for (let i = 0; i < overDeepDepth; i++) {
+        deep = { child: deep };
+      }
+
+      let sanitized: unknown;
+      expect(() => {
+        sanitized = sanitizeRawUpdatePayload(deep);
+      }).not.toThrow();
+
+      // The tail past the cap is replaced by the truncation marker rather than recursed into.
+      expect(JSON.stringify(sanitized)).toContain(MAX_RAW_PAYLOAD_DEPTH_MARKER);
+
+      // The cap is enforced at exactly MAX_RAW_PAYLOAD_DEPTH: walking down that many levels stays
+      // inside the real payload, and the next level is the marker.
+      let cursor: unknown = sanitized;
+      for (let i = 0; i < MAX_RAW_PAYLOAD_DEPTH; i++) {
+        cursor = (cursor as Record<string, unknown>).child;
+      }
+      expect(cursor).toBe(MAX_RAW_PAYLOAD_DEPTH_MARKER);
     });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { FastifyInstance } from 'fastify';
 import pg from 'pg';
 import crypto from 'node:crypto';
@@ -504,6 +504,281 @@ describe('Ticket 12: Userbot Session HTTP Routes Integration Tests', () => {
   });
 
   // --- 5. Ticket 13: Credential Boundary Validation ---
+  // --- 5. Corrupt apiHash credential envelope (PARTIAL) over HTTP ---
+  describe('Corrupt apiHash envelope: session-scoped routes surface PARTIAL storage', () => {
+    // The test database is shared across files and the preflight scan is global, so rows left
+    // behind here would skew sibling assertions. Remove this district's session rows after each test.
+    afterEach(async () => {
+      await db
+        .delete(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, testDistrictId));
+    });
+
+    async function insertPartialEnvelopeSession(status: 'ACTIVE' | 'DISABLED') {
+      const sessionId = `dtus_${crypto.randomUUID()}`;
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: sessionId,
+        districtId: testDistrictId,
+        phoneNumber: '+998901234567',
+        apiId: '12345678',
+        // PARTIAL: ciphertext present, IV and auth tag missing. No write path in the module can
+        // produce this, so it represents a corrupt stored credential.
+        apiHashEncrypted: 'corrupt_partial_ciphertext',
+        apiHashIv: null,
+        apiHashTag: null,
+        status,
+      });
+      return sessionId;
+    }
+
+    it('GET returns 500 USERBOT_API_HASH_ENVELOPE_CORRUPT for a PARTIAL envelope', async () => {
+      await insertPartialEnvelopeSession('ACTIVE');
+
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body.error.code).toBe('USERBOT_API_HASH_ENVELOPE_CORRUPT');
+    });
+
+    it('disable returns 500 USERBOT_API_HASH_ENVELOPE_CORRUPT and does NOT transition the session', async () => {
+      await insertPartialEnvelopeSession('ACTIVE');
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session/disable`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body.error.code).toBe('USERBOT_API_HASH_ENVELOPE_CORRUPT');
+
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, testDistrictId));
+      expect(row?.status).toBe('ACTIVE');
+
+      const audits = await db
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.districtId, testDistrictId));
+      expect(audits).toHaveLength(0);
+    });
+
+    it('enable returns 500 USERBOT_API_HASH_ENVELOPE_CORRUPT for a PARTIAL envelope', async () => {
+      await insertPartialEnvelopeSession('DISABLED');
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session/enable`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body.error.code).toBe('USERBOT_API_HASH_ENVELOPE_CORRUPT');
+
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, testDistrictId));
+      expect(row?.status).toBe('DISABLED');
+    });
+
+    it('GET still returns 200 for a COMPLETE envelope', async () => {
+      const encHash = encryptToken('super_secret_api_hash');
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: `dtus_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        phoneNumber: '+998901234567',
+        apiId: '12345678',
+        apiHashEncrypted: encHash.encryptedToken,
+        apiHashIv: encHash.tokenIv,
+        apiHashTag: encHash.tokenTag,
+        apiHashKeyVersion: encHash.tokenKeyVersion,
+        status: 'ACTIVE',
+      });
+
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().session.status).toBe('ACTIVE');
+    });
+
+    it('GET returns 200 with hasSession false for an all-NULL session envelope', async () => {
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: `dtus_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        phoneNumber: '+998901234567',
+        apiId: '12345678',
+        apiHashEncrypted: null,
+        apiHashIv: null,
+        apiHashTag: null,
+        sessionEncrypted: null,
+        sessionIv: null,
+        sessionTag: null,
+        status: 'PENDING',
+      });
+
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().session.hasSession).toBe(false);
+    });
+
+    it('GET still returns 200 for an all-NULL (ABSENT) envelope', async () => {
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: `dtus_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        phoneNumber: '+998901234567',
+        apiId: '12345678',
+        apiHashEncrypted: null,
+        apiHashIv: null,
+        apiHashTag: null,
+        status: 'PENDING',
+      });
+
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().session.status).toBe('PENDING');
+    });
+  });
+
+  describe('Corrupt session credential envelope: session-scoped routes surface PARTIAL storage', () => {
+    afterEach(async () => {
+      await db
+        .delete(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, testDistrictId));
+    });
+
+    async function insertPartialSessionEnvelope(status: 'ACTIVE' | 'DISABLED') {
+      const encHash = encryptToken('http_session_envelope_api_hash');
+      await db.insert(districtTelegramUserbotSessions).values({
+        id: `dtus_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        phoneNumber: '+998901234567',
+        apiId: '12345678',
+        // The apiHash envelope is COMPLETE, so the only corruption in play is the session one.
+        apiHashEncrypted: encHash.encryptedToken,
+        apiHashIv: encHash.tokenIv,
+        apiHashTag: encHash.tokenTag,
+        apiHashKeyVersion: encHash.tokenKeyVersion,
+        // PARTIAL: session ciphertext present, IV and auth tag missing. No write path in the module
+        // can produce this, so it represents a corrupt stored credential.
+        sessionEncrypted: 'corrupt_partial_session_ciphertext',
+        sessionIv: null,
+        sessionTag: null,
+        status,
+      });
+    }
+
+    it('GET returns 500 USERBOT_SESSION_ENVELOPE_CORRUPT for a PARTIAL session envelope', async () => {
+      await insertPartialSessionEnvelope('ACTIVE');
+
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body.error.code).toBe('USERBOT_SESSION_ENVELOPE_CORRUPT');
+    });
+
+    it('disable returns 500 USERBOT_SESSION_ENVELOPE_CORRUPT and does NOT transition the session', async () => {
+      await insertPartialSessionEnvelope('ACTIVE');
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session/disable`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body.error.code).toBe('USERBOT_SESSION_ENVELOPE_CORRUPT');
+
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, testDistrictId));
+      expect(row?.status).toBe('ACTIVE');
+
+      const audits = await db
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.districtId, testDistrictId));
+      expect(audits).toHaveLength(0);
+    });
+
+    it('enable returns 500 USERBOT_SESSION_ENVELOPE_CORRUPT instead of grading the row ACTIVE', async () => {
+      await insertPartialSessionEnvelope('DISABLED');
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/api/v1/districts/${testDistrictId}/userbot-session/enable`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(500);
+      const body = res.json();
+      expect(body.error.code).toBe('USERBOT_SESSION_ENVELOPE_CORRUPT');
+
+      const [row] = await db
+        .select()
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, testDistrictId));
+      expect(row?.status).toBe('DISABLED');
+    });
+  });
+
   describe('Ticket 13: Credential Boundary Validation (HTTP Routes)', () => {
     describe('phoneNumber validation', () => {
       it('rejects short malformed phone number ("123") with 400 VALIDATION_ERROR naming phoneNumber', async () => {

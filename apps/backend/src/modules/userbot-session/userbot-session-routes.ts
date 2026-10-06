@@ -16,6 +16,8 @@ import {
   UserbotSessionNotFoundError,
   SessionBannedError,
   UserbotSessionDisabledError,
+  UserbotApiHashEnvelopeCorruptError,
+  UserbotSessionEnvelopeCorruptError,
   ConflictError,
   UserbotCredentialValidationError,
 } from './userbot-session-service.js';
@@ -51,10 +53,17 @@ function formatPublicSession(session: PublicDistrictUserbotSession) {
   };
 }
 
+// The two default error messages live here as named constants rather than as default parameter
+// values on the constructors below, which this codebase's standards forbid. Both the throw sites
+// and the fallback branches in handleUserbotSessionError read these, so the operator-facing text
+// is still written down exactly once.
+const UNAUTHORIZED_MESSAGE = 'Сессия топилмади ёки муддати тугаган.';
+const FORBIDDEN_MESSAGE = 'Ушбу амални бажариш учун ҳуқуқ етарли эмас.';
+
 export class UnauthorizedError extends Error {
   readonly code = 'UNAUTHENTICATED' as const;
   readonly statusCode = 401;
-  constructor(message = 'Сессия топилмади ёки муддати тугаган.') {
+  constructor(message: string) {
     super(message);
     this.name = 'UnauthorizedError';
   }
@@ -63,7 +72,7 @@ export class UnauthorizedError extends Error {
 export class ForbiddenError extends Error {
   readonly code = 'FORBIDDEN' as const;
   readonly statusCode = 403;
-  constructor(message = 'Ушбу амални бажариш учун ҳуқуқ етарли эмас.') {
+  constructor(message: string) {
     super(message);
     this.name = 'ForbiddenError';
   }
@@ -77,7 +86,7 @@ function handleUserbotSessionError(err: unknown, reply: FastifyReply) {
     return reply.status(401).send({
       error: {
         code: 'UNAUTHENTICATED',
-        message: err instanceof Error ? err.message : 'Сессия топилмади ёки муддати тугаган.',
+        message: err instanceof Error ? err.message : UNAUTHORIZED_MESSAGE,
       },
     });
   }
@@ -89,7 +98,7 @@ function handleUserbotSessionError(err: unknown, reply: FastifyReply) {
     return reply.status(403).send({
       error: {
         code: 'FORBIDDEN',
-        message: err instanceof Error ? err.message : 'Ушбу амални бажариш учун ҳуқуқ етарли эмас.',
+        message: err instanceof Error ? err.message : FORBIDDEN_MESSAGE,
       },
     });
   }
@@ -158,6 +167,34 @@ function handleUserbotSessionError(err: unknown, reply: FastifyReply) {
     });
   }
 
+  // Checked before the generic ConflictError branch below, which would otherwise flatten this
+  // specific code into 'CONFLICT'.
+  if (
+    err instanceof UserbotApiHashEnvelopeCorruptError ||
+    (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'USERBOT_API_HASH_ENVELOPE_CORRUPT')
+  ) {
+    return reply.status(500).send({
+      error: {
+        code: 'USERBOT_API_HASH_ENVELOPE_CORRUPT',
+        message: err instanceof Error ? err.message : 'Stored userbot API hash credential is corrupt.',
+      },
+    });
+  }
+
+  // Same 500-not-409 reasoning as the apiHash branch above, and the same load-bearing position:
+  // still before the generic ConflictError branch, which would flatten this code into 'CONFLICT'.
+  if (
+    err instanceof UserbotSessionEnvelopeCorruptError ||
+    (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'USERBOT_SESSION_ENVELOPE_CORRUPT')
+  ) {
+    return reply.status(500).send({
+      error: {
+        code: 'USERBOT_SESSION_ENVELOPE_CORRUPT',
+        message: err instanceof Error ? err.message : 'Stored userbot session credential is corrupt.',
+      },
+    });
+  }
+
   if (
     err instanceof ConflictError ||
     (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'CONFLICT')
@@ -196,12 +233,12 @@ export async function resolveDistrictSessionScope(
   // 1. Authentication check
   const actor = req.actor;
   if (!actor) {
-    throw new UnauthorizedError();
+    throw new UnauthorizedError(UNAUTHORIZED_MESSAGE);
   }
 
   // 2. Authorization / Product Owner role check
   if (actor.role !== 'PRODUCT_OWNER') {
-    throw new ForbiddenError();
+    throw new ForbiddenError(FORBIDDEN_MESSAGE);
   }
 
   // 3. District ID parameter check

@@ -37,13 +37,19 @@ class MockGapUserbotClient implements UserbotClientPort {
   private connected = false;
   currentPosition: string | null = null;
 
-  private listeners = {
-    message: [] as ((update: unknown) => void)[],
-    disconnect: [] as ((reason?: string | Error) => void)[],
-    reconnect: [] as (() => void)[],
-    error: [] as ((err: Error) => void)[],
-    ban: [] as ((details?: { reason?: string; error?: Error }) => void)[],
-    gap: [] as ((details?: { reason?: string; lastKnownPosition?: string | null; error?: Error }) => void)[],
+  /**
+   * A complete, key-aligned listener registry: every UserbotClientEvents key is present, so the
+   * generic `on`/`off` implementations below can index it with the event type parameter directly
+   * instead of casting. Omitting `signal` would make this double a structurally partial port.
+   */
+  private listeners: { [K in keyof UserbotClientEvents]: UserbotClientEvents[K][] } = {
+    message: [],
+    disconnect: [],
+    reconnect: [],
+    error: [],
+    ban: [],
+    gap: [],
+    signal: [],
   };
 
   constructor(params: UserbotClientFactoryOptions) {
@@ -63,7 +69,7 @@ class MockGapUserbotClient implements UserbotClientPort {
   async disconnect(): Promise<void> {
     this.disconnectCalls++;
     this.connected = false;
-    this.emit('disconnect');
+    this.emitDisconnect();
   }
 
   isConnected(): boolean {
@@ -79,14 +85,20 @@ class MockGapUserbotClient implements UserbotClientPort {
   }
 
   on<E extends keyof UserbotClientEvents>(event: E, listener: UserbotClientEvents[E]): void {
-    this.listeners[event].push(listener as any);
+    this.listeners[event].push(listener);
   }
 
   off<E extends keyof UserbotClientEvents>(event: E, listener: UserbotClientEvents[E]): void {
-    this.listeners[event] = (this.listeners[event] as any[]).filter((l) => l !== listener);
+    // Removed in place: assigning a filtered array back would not typecheck, because the generic
+    // key E is not narrowed to a single literal key by the compiler at the assignment site.
+    const registered = this.listeners[event];
+    const index = registered.indexOf(listener);
+    if (index >= 0) {
+      registered.splice(index, 1);
+    }
   }
 
-  private emit(event: 'disconnect', reason?: string | Error): void {
+  private emitDisconnect(reason?: string | Error): void {
     for (const fn of this.listeners.disconnect) fn(reason);
   }
 
@@ -496,7 +508,7 @@ describe('Ticket 18: An Unrecoverable Gap is Raised, Not Swallowed', () => {
 
   it('Criterion 6 (AC-6): Recovery after a recoverable gap records no Operational Issue', async () => {
     const fixture = await createTestDistrictFixture('AC6Recoverable');
-    const { districtId, chatChannelId, chatId } = fixture;
+    const { districtId, chatChannelId } = fixture;
 
     // Seed update position
     const initialPos = JSON.stringify({
@@ -774,5 +786,563 @@ describe('Ticket 18: An Unrecoverable Gap is Raised, Not Swallowed', () => {
     expect(typeof issue!.recommendedAction).toBe('string');
     expect(issue!.startedAt instanceof Date).toBe(true);
     expect(issue!.latestCheckAt instanceof Date).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // Slice 4 - Gap recovery lifecycle
+  // ---------------------------------------------------------------------------------------------
+
+  const SEEDED_POSITION = JSON.stringify({
+    version: 'teleproto-v1',
+    pts: 100,
+    qts: 1,
+    date: 1000,
+    seq: 1,
+  });
+  const ADVANCED_POSITION = JSON.stringify({
+    version: 'teleproto-v1',
+    pts: 200,
+    qts: 1,
+    date: 2000,
+    seq: 2,
+  });
+
+  async function seedUpdatePosition(districtId: string): Promise<void> {
+    await db
+      .update(districtTelegramUserbotSessions)
+      .set({ updatePosition: SEEDED_POSITION, updatePositionAdvancedAt: new Date() })
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+  }
+
+  async function startManager(): Promise<UserbotConnectionManager> {
+    const manager = new UserbotConnectionManager({
+      db,
+      pool,
+      boss: mockBoss,
+      clientFactory: mockClientFactory,
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+    activeManagers.push(manager);
+    await manager.start();
+    return manager;
+  }
+
+  async function getGapIssues(districtId: string) {
+    return db
+      .select()
+      .from(operationalIssues)
+      .where(
+        and(
+          eq(operationalIssues.districtId, districtId),
+          eq(operationalIssues.issueCategory, 'UNRECOVERABLE_GAP'),
+        ),
+      );
+  }
+
+  async function getIntakeRecord(districtId: string, telegramMessageId: string) {
+    const [record] = await db
+      .select()
+      .from(telegramIntakeRecords)
+      .where(
+        and(
+          eq(telegramIntakeRecords.districtId, districtId),
+          eq(telegramIntakeRecords.telegramMessageId, telegramMessageId),
+        ),
+      );
+    return record ?? null;
+  }
+
+  /**
+   * A well-formed channel message carried by an update whose OWN classified signal is
+   * UNRECOVERABLE_GAP, so a single handler pass is both a proven ingest and a gap signal.
+   */
+  function createGapSignalledMtprotoChannelMessage(params: {
+    chatChannelId: number;
+    messageId: number;
+    userId: number;
+    text: string;
+  }): unknown {
+    return {
+      _: 'UpdateChannelTooLong',
+      message: {
+        _: 'Message',
+        id: params.messageId,
+        peerId: { _: 'PeerChannel', channelId: params.chatChannelId },
+        fromId: { _: 'PeerUser', userId: params.userId },
+        date: Math.floor(Date.now() / 1000),
+        message: params.text,
+      },
+      chats: [{ _: 'Channel', id: params.chatChannelId, title: 'Navbahor Mahalla Group' }],
+      users: [{ _: 'User', id: params.userId, firstName: 'Anvar', bot: false }],
+    };
+  }
+
+  it('Recovery: a successful inbound update clears the unrecoverable gap and resolves its Operational Issue', async () => {
+    const fixture = await createTestDistrictFixture('RecoveryClears');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    const manager = await startManager();
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    client!.triggerGap({
+      reason: 'UpdateChannelTooLong',
+      lastKnownPosition: SEEDED_POSITION,
+    });
+    await waitFor(() => manager.hasUnrecoverableGap(districtId));
+
+    const degradedHealth = await manager.checkSessionHealth(districtId);
+    expect(degradedHealth.status).toBe('DEGRADED');
+
+    // A proven-successful ingest arrives afterwards.
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createMtprotoChannelMessage({
+        chatChannelId,
+        messageId: 9101,
+        userId: 111,
+        text: 'Live message after the gap',
+      }),
+    );
+
+    await waitFor(async () => {
+      const record = await getIntakeRecord(districtId, '9101');
+      return record !== null && !manager.hasUnrecoverableGap(districtId);
+    });
+
+    const gapIssues = await getGapIssues(districtId);
+    expect(gapIssues).toHaveLength(1);
+    expect(gapIssues[0]!.status).toBe('RESOLVED');
+    expect(gapIssues[0]!.healthStatus).toBe('Healthy');
+    expect(gapIssues[0]!.resolvedAt instanceof Date).toBe(true);
+
+    expect(manager.hasUnrecoverableGap(districtId)).toBe(false);
+
+    const recoveredHealth = await manager.checkSessionHealth(districtId);
+    expect(recoveredHealth.status).toBe('ACTIVE');
+    expect(recoveredHealth.isHealthy).toBe(true);
+  });
+
+  it('Recovery end state: an already-flagged District whose gap-signalled update ingests successfully ends with the gap cleared and its Operational Issue resolved', async () => {
+    const fixture = await createTestDistrictFixture('RecoveryNoReraise');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    const manager = await startManager();
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    client!.triggerGap({
+      reason: 'UpdateChannelTooLong',
+      lastKnownPosition: SEEDED_POSITION,
+    });
+    await waitFor(() => manager.hasUnrecoverableGap(districtId));
+
+    // The message's own classified signal is UNRECOVERABLE_GAP, and the ingest succeeds.
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createGapSignalledMtprotoChannelMessage({
+        chatChannelId,
+        messageId: 9102,
+        userId: 222,
+        text: 'Message whose own signal is a gap',
+      }),
+    );
+
+    await waitFor(async () => {
+      const record = await getIntakeRecord(districtId, '9102');
+      return record !== null && !manager.hasUnrecoverableGap(districtId);
+    });
+
+    // The ingest genuinely succeeded, so the cleared gap is not a vacuous observation.
+    expect(await getIntakeRecord(districtId, '9102')).not.toBeNull();
+
+    const gapIssues = await getGapIssues(districtId);
+    expect(gapIssues).toHaveLength(1);
+    expect(gapIssues[0]!.status).toBe('RESOLVED');
+    expect(gapIssues[0]!.healthStatus).toBe('Healthy');
+    expect(gapIssues[0]!.resolvedAt instanceof Date).toBe(true);
+
+    const activeGapIssues = await db
+      .select()
+      .from(operationalIssues)
+      .where(
+        and(
+          eq(operationalIssues.districtId, districtId),
+          eq(operationalIssues.issueCategory, 'UNRECOVERABLE_GAP'),
+          eq(operationalIssues.status, 'ACTIVE'),
+        ),
+      );
+    expect(activeGapIssues).toHaveLength(0);
+
+    expect(manager.hasUnrecoverableGap(districtId)).toBe(false);
+
+    const health = await manager.checkSessionHealth(districtId);
+    expect(health.status).toBe('ACTIVE');
+    expect(health.isHealthy).toBe(true);
+  });
+
+  it('Recovery regression: a non-successful ingest leaves the gap and its Operational Issue in place', async () => {
+    const fixture = await createTestDistrictFixture('RecoveryKeepsGap');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    const manager = await startManager();
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    client!.triggerGap({
+      reason: 'UpdateChannelTooLong',
+      lastKnownPosition: SEEDED_POSITION,
+    });
+    await waitFor(() => manager.hasUnrecoverableGap(districtId));
+
+    // The update is delivered but cannot be ingested: its chat belongs to no approved group.
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createMtprotoChannelMessage({
+        chatChannelId: chatChannelId + 424242,
+        messageId: 9103,
+        userId: 333,
+        text: 'Message from an unregistered chat',
+      }),
+    );
+
+    await waitFor(async () => (await manager.getInboundUpdateCount(districtId)) > 0);
+
+    // Sampled over a settle window so a late resolution cannot slip past the assertion.
+    const settleDeadline = Date.now() + 750;
+    while (Date.now() < settleDeadline) {
+      expect(manager.hasUnrecoverableGap(districtId)).toBe(true);
+      const activeGapIssues = await db
+        .select()
+        .from(operationalIssues)
+        .where(
+          and(
+            eq(operationalIssues.districtId, districtId),
+            eq(operationalIssues.issueCategory, 'UNRECOVERABLE_GAP'),
+            eq(operationalIssues.status, 'ACTIVE'),
+          ),
+        );
+      expect(activeGapIssues).toHaveLength(1);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // No intake record was persisted for the un-ingestable update.
+    expect(await getIntakeRecord(districtId, '9103')).toBeNull();
+
+    const gapIssues = await getGapIssues(districtId);
+    expect(gapIssues).toHaveLength(1);
+    expect(gapIssues[0]!.status).toBe('ACTIVE');
+    expect(gapIssues[0]!.healthStatus).toBe('Degraded');
+    expect(gapIssues[0]!.resolvedAt).toBeNull();
+
+    const health = await manager.checkSessionHealth(districtId);
+    expect(health.status).toBe('DEGRADED');
+    expect(health.isHealthy).toBe(false);
+  });
+
+  it('Recovery regression: a gap-signalled update that fails to ingest does not lose the existing gap', async () => {
+    const fixture = await createTestDistrictFixture('RecoveryGapSignalFails');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    const manager = await startManager();
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    client!.triggerGap({
+      reason: 'UpdateChannelTooLong',
+      lastKnownPosition: SEEDED_POSITION,
+    });
+    await waitFor(() => manager.hasUnrecoverableGap(districtId));
+
+    // This update carries a gap signal AND belongs to no approved group, so it cannot be ingested.
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createGapSignalledMtprotoChannelMessage({
+        chatChannelId: chatChannelId + 515151,
+        messageId: 9104,
+        userId: 444,
+        text: 'Gap-signalled message from an unregistered chat',
+      }),
+    );
+
+    await waitFor(async () => (await manager.getInboundUpdateCount(districtId)) > 0);
+
+    const settleDeadline = Date.now() + 750;
+    while (Date.now() < settleDeadline) {
+      expect(manager.hasUnrecoverableGap(districtId)).toBe(true);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    expect(await getIntakeRecord(districtId, '9104')).toBeNull();
+
+    const activeGapIssues = await db
+      .select()
+      .from(operationalIssues)
+      .where(
+        and(
+          eq(operationalIssues.districtId, districtId),
+          eq(operationalIssues.issueCategory, 'UNRECOVERABLE_GAP'),
+          eq(operationalIssues.status, 'ACTIVE'),
+        ),
+      );
+    expect(activeGapIssues).toHaveLength(1);
+    expect(activeGapIssues[0]!.healthStatus).toBe('Degraded');
+
+    const health = await manager.checkSessionHealth(districtId);
+    expect(health.status).toBe('DEGRADED');
+  });
+
+  async function getUserbotGapAuditEvents(districtId: string) {
+    return db
+      .select()
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.districtId, districtId),
+          eq(auditEvents.action, 'USERBOT_UNRECOVERABLE_GAP_DETECTED'),
+        ),
+      );
+  }
+
+  it('Recovery discriminator: a further gap-signalled update that does NOT ingest successfully refreshes the already-flagged Operational Issue', async () => {
+    const fixture = await createTestDistrictFixture('CrossPassRefresh');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    const manager = await startManager();
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    // First gap: the District becomes flagged and the Operational Issue row is created.
+    client!.triggerGap({
+      reason: 'UpdateChannelTooLong',
+      lastKnownPosition: SEEDED_POSITION,
+    });
+    await waitFor(async () => (await getGapIssues(districtId)).length === 1);
+    await waitFor(async () => (await getUserbotGapAuditEvents(districtId)).length === 1);
+
+    const [issueBefore] = await getGapIssues(districtId);
+    expect(issueBefore!.status).toBe('ACTIVE');
+    expect(issueBefore!.latestCheckAt instanceof Date).toBe(true);
+    const latestCheckAtBefore = issueBefore!.latestCheckAt;
+    const updatedAtBefore = issueBefore!.updatedAt;
+
+    // Guarantees the refreshed timestamps are strictly later than the baseline.
+    await new Promise((r) => setTimeout(r, 25));
+
+    // A CROSS-PASS gap-signalled update that CANNOT be ingested: its chat belongs to no approved
+    // group, so this pass does not recover. The already-flagged District must still re-raise, which
+    // refreshes the existing issue row rather than leaving monitoring frozen.
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createGapSignalledMtprotoChannelMessage({
+        chatChannelId: chatChannelId + 616161,
+        messageId: 9105,
+        userId: 555,
+        text: 'Gap-signalled message from an unregistered chat',
+      }),
+    );
+
+    await waitFor(async () => (await manager.getInboundUpdateCount(districtId)) > 0);
+    // Lets the remainder of the pass (ingest, recovery block, gap raise) settle.
+    await new Promise((r) => setTimeout(r, 400));
+
+    expect(await getIntakeRecord(districtId, '9105')).toBeNull();
+
+    const gapIssues = await getGapIssues(districtId);
+    expect(gapIssues).toHaveLength(1);
+    expect(gapIssues[0]!.status).toBe('ACTIVE');
+    expect(gapIssues[0]!.healthStatus).toBe('Degraded');
+    expect(gapIssues[0]!.latestCheckAt.getTime()).toBeGreaterThan(
+      latestCheckAtBefore.getTime(),
+    );
+    expect(gapIssues[0]!.updatedAt.getTime()).toBeGreaterThan(updatedAtBefore.getTime());
+
+    const gapAuditEvents = await getUserbotGapAuditEvents(districtId);
+    expect(gapAuditEvents).toHaveLength(2);
+
+    expect(manager.hasUnrecoverableGap(districtId)).toBe(true);
+
+    const health = await manager.checkSessionHealth(districtId);
+    expect(health.status).toBe('DEGRADED');
+  });
+
+  it('Recovery discriminator: a gap-signalled update that ingests successfully in the same pass raises no gap at all', async () => {
+    const fixture = await createTestDistrictFixture('SamePassSkip');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    const manager = await startManager();
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    // The District is NOT pre-flagged. The only gap evidence in this pass is the update's own
+    // signal, and that same pass ingests successfully, so the pass recovers with no prior gap to
+    // clear. Deferring the raise is what makes this observable: acting on the pre-ingest decision
+    // would flag a District whose stream has just been proven to be delivering and persisting.
+    expect(manager.hasUnrecoverableGap(districtId)).toBe(false);
+    const auditCountBefore = (await getUserbotGapAuditEvents(districtId)).length;
+    expect(auditCountBefore).toBe(0);
+
+    // This message's OWN classified signal is UNRECOVERABLE_GAP and its ingest succeeds, so a
+    // single pass is both a gap signal and a proven recovery.
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createGapSignalledMtprotoChannelMessage({
+        chatChannelId,
+        messageId: 9106,
+        userId: 666,
+        text: 'Message whose own signal is a gap and which recovers the stream',
+      }),
+    );
+
+    await waitFor(async () => (await getIntakeRecord(districtId, '9106')) !== null);
+    // Lets the recovery block and any (incorrect) raise settle, sampled across the window so a
+    // late raise cannot slip past the assertions.
+    const settleDeadline = Date.now() + 750;
+    while (Date.now() < settleDeadline) {
+      expect(manager.hasUnrecoverableGap(districtId)).toBe(false);
+      expect(await getGapIssues(districtId)).toHaveLength(0);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // The ingest genuinely succeeded, so the absence of a gap is not a vacuous observation.
+    expect(await getIntakeRecord(districtId, '9106')).not.toBeNull();
+
+    // No gap was raised for the recovering pass.
+    expect((await getUserbotGapAuditEvents(districtId)).length).toBe(auditCountBefore);
+
+    const health = await manager.checkSessionHealth(districtId);
+    expect(health.status).toBe('ACTIVE');
+    expect(health.isHealthy).toBe(true);
+  });
+
+  it('Recovery discriminator: a gap-signalled update that fails to ingest on a NOT-yet-flagged District still raises the gap', async () => {
+    const fixture = await createTestDistrictFixture('UnflaggedFailingGap');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    const manager = await startManager();
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    // Nothing has flagged this District yet, and this pass will not recover: its chat belongs to
+    // no approved group. The pass outcome is what governs the deferred raise, so the gap must be
+    // raised exactly as it was before the deferral -- a condition reading the in-memory flag would
+    // silently drop this raise.
+    expect(manager.hasUnrecoverableGap(districtId)).toBe(false);
+    expect(await getGapIssues(districtId)).toHaveLength(0);
+
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createGapSignalledMtprotoChannelMessage({
+        chatChannelId: chatChannelId + 727272,
+        messageId: 9107,
+        userId: 777,
+        text: 'Gap-signalled message from an unregistered chat on a clean District',
+      }),
+    );
+
+    await waitFor(async () => manager.hasUnrecoverableGap(districtId));
+    await waitFor(async () => (await getGapIssues(districtId)).length === 1);
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(await getIntakeRecord(districtId, '9107')).toBeNull();
+
+    const gapIssues = await getGapIssues(districtId);
+    expect(gapIssues).toHaveLength(1);
+    expect(gapIssues[0]!.status).toBe('ACTIVE');
+    expect(gapIssues[0]!.healthStatus).toBe('Degraded');
+    expect((await getUserbotGapAuditEvents(districtId)).length).toBe(1);
+
+    const health = await manager.checkSessionHealth(districtId);
+    expect(health.status).toBe('DEGRADED');
+  });
+
+  it('Recovery: a gap-signalled update whose ingest path THROWS still refreshes the already-flagged Operational Issue', async () => {
+    const fixture = await createTestDistrictFixture('ThrowPathGapRefresh');
+    const { districtId, chatChannelId } = fixture;
+    await seedUpdatePosition(districtId);
+
+    // The ingest boundary fails for this pass: a pool whose connect() always throws makes
+    // processUserbotIngestEnvelope throw before it can persist anything, which is exactly the
+    // throwing region the deferred raise must survive. The manager still receives this db client,
+    // so the stream-level gap path and the update counter below keep working.
+    const throwingPool = {
+      connect: () => {
+        throw new Error('Simulated ingest-boundary failure: pool.connect() is unavailable');
+      },
+    } as unknown as pg.Pool;
+
+    const manager = new UserbotConnectionManager({
+      db,
+      pool: throwingPool,
+      boss: mockBoss,
+      clientFactory: mockClientFactory,
+      lastSeenIntervalMs: 0,
+      pollIntervalMs: 0,
+    });
+    activeManagers.push(manager);
+    await manager.start();
+
+    const client = createdClients.get(districtId);
+    expect(client).toBeDefined();
+
+    // First gap: the District becomes flagged and the Operational Issue row is created.
+    client!.triggerGap({
+      reason: 'UpdateChannelTooLong',
+      lastKnownPosition: SEEDED_POSITION,
+    });
+    await waitFor(async () => (await getGapIssues(districtId)).length === 1);
+    await waitFor(async () => (await getUserbotGapAuditEvents(districtId)).length === 1);
+
+    const [issueBefore] = await getGapIssues(districtId);
+    expect(issueBefore!.status).toBe('ACTIVE');
+    const latestCheckAtBefore = issueBefore!.latestCheckAt;
+    const updatedAtBefore = issueBefore!.updatedAt;
+
+    // Guarantees the refreshed timestamps are strictly later than the baseline.
+    await new Promise((r) => setTimeout(r, 25));
+
+    // The update carries a gap signal AND a well-formed message, so normalization succeeds and the
+    // pass reaches the throwing ingest boundary. The pass does NOT recover, so the deferred raise
+    // must still run and refresh the already-flagged District's Operational Issue.
+    client!.setUpdatePosition(ADVANCED_POSITION);
+    client!.pushUpdate(
+      createGapSignalledMtprotoChannelMessage({
+        chatChannelId,
+        messageId: 9108,
+        userId: 888,
+        text: 'Gap-signalled message whose ingest path throws',
+      }),
+    );
+
+    await waitFor(async () => (await manager.getInboundUpdateCount(districtId)) > 0);
+    // Lets the remainder of the pass (throwing ingest, deferred raise) settle.
+    await new Promise((r) => setTimeout(r, 400));
+
+    expect(await getIntakeRecord(districtId, '9108')).toBeNull();
+
+    const gapIssues = await getGapIssues(districtId);
+    expect(gapIssues).toHaveLength(1);
+    expect(gapIssues[0]!.status).toBe('ACTIVE');
+    expect(gapIssues[0]!.healthStatus).toBe('Degraded');
+    expect(gapIssues[0]!.latestCheckAt.getTime()).toBeGreaterThan(
+      latestCheckAtBefore.getTime(),
+    );
+    expect(gapIssues[0]!.updatedAt.getTime()).toBeGreaterThan(updatedAtBefore.getTime());
+
+    const gapAuditEvents = await getUserbotGapAuditEvents(districtId);
+    expect(gapAuditEvents).toHaveLength(2);
+
+    expect(manager.hasUnrecoverableGap(districtId)).toBe(true);
+
+    const health = await manager.checkSessionHealth(districtId);
+    expect(health.status).toBe('DEGRADED');
   });
 });

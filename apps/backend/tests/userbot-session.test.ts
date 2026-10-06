@@ -24,6 +24,12 @@ import {
   reencryptUserbotSessions,
   backfillEncryptedApiHash,
   UserbotCredentialValidationError,
+  UserbotApiHashEnvelopeCorruptError,
+  UserbotSessionEnvelopeCorruptError,
+  classifyApiHashEnvelope,
+  classifySessionEnvelope,
+  classifyEncryptedEnvelope,
+  verifyApiHashEnvelopes,
 } from '../src/modules/userbot-session/index.js';
 import { UnresolvableKeyVersionError } from '../src/adapters/crypto/token-cipher.js';
 import { DistrictNotFoundError } from '../src/modules/districts/districts-service.js';
@@ -33,7 +39,6 @@ import {
   USERBOT_SESSION_AUDIT_ACTIONS,
   UserbotSessionAuditActionSchema,
   USERBOT_AUDIT_ACTIONS,
-  UserbotAuditActionSchema,
 } from '@mahalla-ovozi/api-contracts';
 import { UserbotConnectionManager } from '../src/modules/userbot/index.js';
 import { logger } from '../src/utils/logger.js';
@@ -293,7 +298,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
     expect(disableEvent!.actorRole).toBe(actorRole);
     expect(disableEvent!.metadata).toMatchObject({
       previousStatus: 'PENDING',
-      secretsCleared: true,
+      secretsCleared: false,
     });
 
     // 3. Enable session -> emits USERBOT_SESSION_ENABLED (transitions to PENDING because disable cleared credentials)
@@ -389,7 +394,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
     expect(statusEvent!.metadata).toMatchObject({
       previousStatus: 'ACTIVE',
       newStatus: 'PENDING',
-      secretsCleared: true,
+      secretsCleared: false,
       reason: 'ACCOUNT_DELETED',
     });
   });
@@ -757,6 +762,21 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
   });
 
   describe('Server-Side Revocation on Disable & Secret Clearing (Ticket 09)', () => {
+    it('defaultTelegramSessionRevoker reports a no-session no-op without a revocationSuccess verdict', async () => {
+      // The empty/no-session branch was previously unasserted. It must report only
+      // revocationPerformed: false and OMIT the optional revocationSuccess field, because consumers
+      // read that field solely as `=== false` to classify an audit FAILURE; emitting false would
+      // reclassify a benign no-op as a failure.
+      const outcome = await defaultTelegramSessionRevoker({
+        districtId: 'dist_revoker_no_session',
+        sessionString: '   ',
+        apiId: '12345678',
+      });
+
+      expect(outcome).toEqual({ revocationPerformed: false });
+      expect('revocationSuccess' in outcome).toBe(false);
+    });
+
     it('Criterion 1: disabling an active session executes server-side revocation, clears secrets, preserves key version, and records audit event', async () => {
       const districtId = await createTestDistrict('Ticket09ActiveRevocation');
       const secretSessionString = '1ApW_Active_Session_Key_For_Ticket_09_Revocation!';
@@ -818,7 +838,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       expect(disableEvent!.metadata).toMatchObject({
         previousStatus: 'ACTIVE',
         revocationPerformed: true,
-        secretsCleared: true,
+        secretsCleared: false,
       });
     });
 
@@ -942,7 +962,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       expect(disableEvent!.metadata).toMatchObject({
         previousStatus: 'ACTIVE',
         revocationPerformed: false,
-        secretsCleared: true,
+        secretsCleared: false,
       });
     });
 
@@ -1452,6 +1472,54 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       expect(report2.remainingCount).toBe(0);
     });
 
+    it('A PARTIAL session envelope on the SAME key version as the target is reported, not silently skipped', async () => {
+      process.env.ENCRYPTION_KEY_VERSION = 'v1';
+      process.env.ENCRYPTION_KEY = keyV1;
+      process.env.ENCRYPTION_KEY_V1 = keyV1;
+
+      const districtId = await createTestDistrict('SameVersionPartial');
+
+      try {
+        await createDistrictUserbotSession(db, {
+          districtId,
+          phoneNumber: '+998901110061',
+          apiId: '12345678',
+          apiHash: 'hash_same_ver_partial',
+          sessionString: 'session_string_partial_same_version',
+        });
+
+        // Move the row onto the TARGET key version while stripping its IV, producing a PARTIAL
+        // envelope whose sessionKeyVersion already equals the target. The old guard tested iv/tag
+        // only inside the `keyVersion !== target` branch, so this row was skipped in total silence:
+        // no error, no log, no migration. Classification now happens before that branch.
+        const [partialRow] = await db
+          .update(districtTelegramUserbotSessions)
+          .set({ sessionKeyVersion: 'v2', sessionIv: null })
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+          .returning();
+
+        process.env.ENCRYPTION_KEY_VERSION = 'v2';
+        process.env.ENCRYPTION_KEY_V2 = keyV2;
+        process.env.ENCRYPTION_KEY_V1 = keyV1;
+
+        await expect(
+          reencryptUserbotSessions(db, { targetKeyVersion: 'v2', districtIds: [districtId] }),
+        ).rejects.toThrow(UserbotSessionEnvelopeCorruptError);
+
+        await expect(
+          reencryptUserbotSessions(db, { targetKeyVersion: 'v2', districtIds: [districtId] }),
+        ).rejects.toThrow(
+          new RegExp(
+            `Userbot session row '${partialRow!.id}' \\(district '${districtId}'\\) has a corrupt encrypted session envelope`,
+          ),
+        );
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
     it('A rotation that fails part-way leaves every stored session decryptable and no session lost', async () => {
       process.env.ENCRYPTION_KEY_VERSION = 'v1';
       process.env.ENCRYPTION_KEY_V1 = keyV1;
@@ -1779,6 +1847,171 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       expect(decrypted!.apiHash).toBeNull();
     });
 
+    it('Distinguishes the three apiHash envelope states: complete, all-null, and corrupt PARTIAL', () => {
+      expect(
+        classifyApiHashEnvelope({ apiHashEncrypted: 'enc', apiHashIv: 'iv', apiHashTag: 'tag' }),
+      ).toBe('COMPLETE');
+      expect(
+        classifyApiHashEnvelope({ apiHashEncrypted: null, apiHashIv: null, apiHashTag: null }),
+      ).toBe('ABSENT');
+      expect(
+        classifyApiHashEnvelope({ apiHashEncrypted: 'enc', apiHashIv: null, apiHashTag: null }),
+      ).toBe('PARTIAL');
+      expect(
+        classifyApiHashEnvelope({ apiHashEncrypted: null, apiHashIv: 'iv', apiHashTag: null }),
+      ).toBe('PARTIAL');
+      expect(
+        classifyApiHashEnvelope({ apiHashEncrypted: null, apiHashIv: null, apiHashTag: 'tag' }),
+      ).toBe('PARTIAL');
+      expect(
+        classifyApiHashEnvelope({ apiHashEncrypted: 'enc', apiHashIv: 'iv', apiHashTag: null }),
+      ).toBe('PARTIAL');
+      // A blank column is absent, matching the module's non-null-and-non-blank convention.
+      expect(
+        classifyApiHashEnvelope({ apiHashEncrypted: 'enc', apiHashIv: '   ', apiHashTag: null }),
+      ).toBe('PARTIAL');
+    });
+
+    it('A PARTIAL apiHash envelope fails loudly with UserbotApiHashEnvelopeCorruptError instead of returning a silent null apiHash', async () => {
+      const districtId = await createTestDistrict('PartialEnvelopeCorrupt');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119921',
+        apiId: '1119921',
+        apiHash: 'hash_partial_9921',
+      });
+
+      // Simulate a corrupt row: ciphertext retained, authentication tag lost.
+      const [updated] = await db
+        .update(districtTelegramUserbotSessions)
+        .set({ apiHashTag: null })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+        .returning();
+
+      try {
+        const rejection = getDecryptedUserbotSession(db, districtId);
+        await expect(rejection).rejects.toThrow(UserbotApiHashEnvelopeCorruptError);
+        await expect(rejection).rejects.toThrow(
+          new RegExp(
+            `Userbot session row '${updated!.id}' \\(district '${districtId}'\\) has a corrupt encrypted apiHash envelope`,
+          ),
+        );
+        await expect(rejection).rejects.toSatisfy((err: unknown) => {
+          expect((err as UserbotApiHashEnvelopeCorruptError).code).toBe(
+            'USERBOT_API_HASH_ENVELOPE_CORRUPT',
+          );
+          return true;
+        });
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
+    it('An ALL-NULL apiHash envelope still returns apiHash null without throwing', async () => {
+      const districtId = await createTestDistrict('AllNullEnvelope');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119922',
+        apiId: '1119922',
+        apiHash: null,
+      });
+
+      const decrypted = await getDecryptedUserbotSession(db, districtId);
+      expect(decrypted).not.toBeNull();
+      expect(decrypted!.apiHash).toBeNull();
+    });
+
+    it('A COMPLETE apiHash envelope still decrypts to the original plaintext', async () => {
+      const districtId = await createTestDistrict('CompleteEnvelope');
+      const plainApiHash = 'hash_complete_9923';
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119923',
+        apiId: '1119923',
+        apiHash: plainApiHash,
+      });
+
+      const decrypted = await getDecryptedUserbotSession(db, districtId);
+      expect(decrypted!.apiHash).toBe(plainApiHash);
+    });
+
+    it('The bootstrap fallback is preserved: an absent envelope with apiHash passed as a parameter does NOT throw', async () => {
+      const districtId = await createTestDistrict('BootstrapFallbackAbsentEnvelope');
+      const paramHash = 'hash_supplied_as_param_9924';
+
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119924',
+        apiId: '1119924',
+        apiHash: null,
+      });
+
+      const mockAuth = new MockAuthClient();
+      await bootstrapUserbotSession(db, {
+        districtId,
+        getPhoneCode: async () => '12345',
+        authClient: mockAuth as any,
+        apiHash: paramHash,
+      });
+
+      expect(mockAuth.sendCodeCalls.length).toBe(1);
+      expect(mockAuth.sendCodeCalls[0]?.apiHash).toBe(paramHash);
+    });
+
+    it('Read-only preflight reports envelope health and lists corrupt rows', async () => {
+      const cleanDistrict = await createTestDistrict('PreflightClean');
+      await createDistrictUserbotSession(db, {
+        districtId: cleanDistrict,
+        phoneNumber: '+998901119925',
+        apiId: '1119925',
+        apiHash: 'hash_preflight_clean',
+      });
+
+      const absentDistrict = await createTestDistrict('PreflightAbsent');
+      await createDistrictUserbotSession(db, {
+        districtId: absentDistrict,
+        phoneNumber: '+998901119926',
+        apiId: '1119926',
+        apiHash: null,
+      });
+
+      // The scan is global, so assert deltas against the baseline rather than absolute counts: a
+      // sibling test could legitimately leave its own rows behind.
+      const baseline = await verifyApiHashEnvelopes(db);
+
+      const corruptDistrict = await createTestDistrict('PreflightCorrupt');
+      try {
+        await createDistrictUserbotSession(db, {
+          districtId: corruptDistrict,
+          phoneNumber: '+998901119927',
+          apiId: '1119927',
+          apiHash: 'hash_preflight_corrupt',
+        });
+
+        await db
+          .update(districtTelegramUserbotSessions)
+          .set({ apiHashIv: null })
+          .where(eq(districtTelegramUserbotSessions.districtId, corruptDistrict));
+
+        const report = await verifyApiHashEnvelopes(db);
+        expect(report.partialCount).toBe(baseline.partialCount + 1);
+        expect(report.partialRows.map((r) => r.districtId)).toContain(corruptDistrict);
+        expect(report.partialRowsTruncated).toBe(false);
+        expect(report.activePartialCount).toBe(0);
+        expect(report.completeCount).toBeGreaterThanOrEqual(1);
+        expect(report.absentCount).toBeGreaterThanOrEqual(1);
+        expect(report.totalRows).toBe(
+          report.completeCount + report.absentCount + report.partialCount,
+        );
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, corruptDistrict));
+      }
+    });
+
     it('Ticket 12 Acceptance Criteria: plaintext api_hash column is gone, encrypted envelope remains, and pre-drop verification blocks on offending rows', async () => {
       // 1. Verify plaintext api_hash column is gone from physical table
       const columnRows = await pool.query(`
@@ -1887,6 +2120,321 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       const decrypted = await getDecryptedUserbotSession(db, districtId);
       expect(decrypted!.apiHash).toBe(authHash);
       expect(decrypted!.sessionString).toBe('mock_session_str_t11');
+    });
+  });
+
+  describe('Session-string credential envelope integrity (partial-envelope silent degradation)', () => {
+    it('Distinguishes the three session envelope states, with a blank column counting as absent', () => {
+      expect(
+        classifySessionEnvelope({ sessionEncrypted: 'enc', sessionIv: 'iv', sessionTag: 'tag' }),
+      ).toBe('COMPLETE');
+      expect(
+        classifySessionEnvelope({ sessionEncrypted: null, sessionIv: null, sessionTag: null }),
+      ).toBe('ABSENT');
+      expect(
+        classifySessionEnvelope({ sessionEncrypted: 'enc', sessionIv: null, sessionTag: null }),
+      ).toBe('PARTIAL');
+      expect(
+        classifySessionEnvelope({ sessionEncrypted: null, sessionIv: 'iv', sessionTag: null }),
+      ).toBe('PARTIAL');
+      expect(
+        classifySessionEnvelope({ sessionEncrypted: null, sessionIv: null, sessionTag: 'tag' }),
+      ).toBe('PARTIAL');
+      expect(
+        classifySessionEnvelope({ sessionEncrypted: 'enc', sessionIv: 'iv', sessionTag: null }),
+      ).toBe('PARTIAL');
+      expect(
+        classifySessionEnvelope({ sessionEncrypted: '   ', sessionIv: 'iv', sessionTag: 'tag' }),
+      ).toBe('PARTIAL');
+    });
+
+    it('classifyEncryptedEnvelope is total: undefined behaves exactly like null', () => {
+      expect(classifyEncryptedEnvelope(undefined, undefined, undefined)).toBe('ABSENT');
+      expect(classifyEncryptedEnvelope(null, undefined, undefined)).toBe('ABSENT');
+      expect(classifyEncryptedEnvelope('enc', undefined, undefined)).toBe('PARTIAL');
+      expect(classifyEncryptedEnvelope(null, undefined, 'tag')).toBe('PARTIAL');
+      expect(classifyEncryptedEnvelope('enc', 'iv', undefined)).toBe('PARTIAL');
+      expect(classifyEncryptedEnvelope('enc', 'iv', 'tag')).toBe('COMPLETE');
+    });
+
+    it('An ALL-WHITESPACE session triple is treated as absent, never handed to the decryptor', async () => {
+      // Tested nowhere before this fix: the write path normalizes blank strings to NULL, so this
+      // state is reachable only through out-of-band corruption. A truthiness guard accepted it as a
+      // stored credential and passed three blank strings into decryptToken.
+      const districtId = await createTestDistrict('AllWhitespaceSessionEnvelope');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119936',
+        apiId: '1119936',
+        apiHash: 'hash_all_whitespace_session',
+        sessionString: '1ApW_all_whitespace_session_secret',
+      });
+
+      const [blanked] = await db
+        .update(districtTelegramUserbotSessions)
+        .set({ sessionEncrypted: '   ', sessionIv: '   ', sessionTag: '   ' })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+        .returning();
+
+      try {
+        expect(
+          classifySessionEnvelope({
+            sessionEncrypted: blanked!.sessionEncrypted,
+            sessionIv: blanked!.sessionIv,
+            sessionTag: blanked!.sessionTag,
+          }),
+        ).toBe('ABSENT');
+
+        const decrypted = await getDecryptedUserbotSession(db, districtId);
+        expect(decrypted).not.toBeNull();
+        expect(decrypted!.sessionString).toBeNull();
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
+    it('getDecryptedUserbotSession fails loudly on a PARTIAL session envelope instead of returning a silent null', async () => {
+      const districtId = await createTestDistrict('PartialSessionEnvelope');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119931',
+        apiId: '1119931',
+        apiHash: 'hash_session_partial',
+        sessionString: '1ApW_partial_session_envelope_secret',
+      });
+
+      // Simulate a corrupt row: session ciphertext retained, authentication tag lost.
+      const [updated] = await db
+        .update(districtTelegramUserbotSessions)
+        .set({ sessionTag: null })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+        .returning();
+
+      try {
+        await expect(getDecryptedUserbotSession(db, districtId)).rejects.toThrow(
+          UserbotSessionEnvelopeCorruptError,
+        );
+        await expect(getDecryptedUserbotSession(db, districtId)).rejects.toThrow(
+          new RegExp(
+            `Userbot session row '${updated!.id}' \\(district '${districtId}'\\) has a corrupt encrypted session envelope`,
+          ),
+        );
+        await expect(getDecryptedUserbotSession(db, districtId)).rejects.toSatisfy((err: unknown) => {
+          expect((err as UserbotSessionEnvelopeCorruptError).code).toBe(
+            'USERBOT_SESSION_ENVELOPE_CORRUPT',
+          );
+          return true;
+        });
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
+    it('An ALL-NULL session envelope stays legitimate: sessionString is null and nothing throws', async () => {
+      const districtId = await createTestDistrict('AllNullSessionEnvelope');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119932',
+        apiId: '1119932',
+        apiHash: 'hash_all_null_session',
+      });
+
+      const decrypted = await getDecryptedUserbotSession(db, districtId);
+      expect(decrypted).not.toBeNull();
+      expect(decrypted!.sessionString).toBeNull();
+      expect(decrypted!.apiHash).toBe('hash_all_null_session');
+    });
+
+    it('getDistrictUserbotSession surfaces a PARTIAL session envelope instead of reporting hasSession false', async () => {
+      const districtId = await createTestDistrict('PublicPartialSession');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119933',
+        apiId: '1119933',
+        apiHash: 'hash_public_partial',
+        sessionString: '1ApW_public_partial_session_secret',
+      });
+
+      await db
+        .update(districtTelegramUserbotSessions)
+        .set({ sessionIv: null })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+      try {
+        await expect(getDistrictUserbotSession(db, districtId)).rejects.toThrow(
+          UserbotSessionEnvelopeCorruptError,
+        );
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
+    it('disable refuses a PARTIAL session envelope: no revocation attempt, no transition, no audit', async () => {
+      const districtId = await createTestDistrict('DisablePartialSession');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119934',
+        apiId: '1119934',
+        apiHash: 'hash_disable_partial',
+        sessionString: '1ApW_disable_partial_session_secret',
+      });
+
+      await db
+        .update(districtTelegramUserbotSessions)
+        .set({ sessionTag: null })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+      const revokerSpy = vi.fn().mockResolvedValue({ revocationPerformed: true });
+
+      try {
+        await expect(
+          disableDistrictUserbotSession(db, districtId, {
+            actorId: 'po_partial_session',
+            actorRole: 'PRODUCT_OWNER',
+            revoker: revokerSpy,
+          }),
+        ).rejects.toThrow(UserbotSessionEnvelopeCorruptError);
+
+        // The corrupt row is never revoked against and never transitioned.
+        expect(revokerSpy).not.toHaveBeenCalled();
+
+        const [row] = await db
+          .select()
+          .from(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+        expect(row?.status).toBe('PENDING');
+
+        const audits = await db
+          .select()
+          .from(auditEvents)
+          .where(eq(auditEvents.districtId, districtId));
+        expect(audits.filter((e) => e.action === 'USERBOT_SESSION_DISABLED')).toHaveLength(0);
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
+    it('enable refuses to grade a PARTIAL session envelope ACTIVE', async () => {
+      const districtId = await createTestDistrict('EnablePartialSession');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119935',
+        apiId: '1119935',
+        apiHash: 'hash_enable_partial',
+        sessionString: '1ApW_enable_partial_session_secret',
+      });
+
+      // Ciphertext present with its IV retained but the tag lost, and the row parked in DISABLED so
+      // the enable path would otherwise clear the secrets and settle on PENDING.
+      await db
+        .update(districtTelegramUserbotSessions)
+        .set({ status: 'DISABLED', sessionTag: null })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+      try {
+        await expect(enableDistrictUserbotSession(db, districtId)).rejects.toThrow(
+          UserbotSessionEnvelopeCorruptError,
+        );
+
+        const [row] = await db
+          .select()
+          .from(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+        expect(row?.status).toBe('DISABLED');
+        expect(row?.sessionEncrypted).not.toBeNull();
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
+    it('bootstrap rejects a PARTIAL apiHash envelope as corruption rather than a misleading credential-validation error', async () => {
+      const districtId = await createTestDistrict('BootstrapPartialApiHash');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998901119936',
+        apiId: '1119936',
+        apiHash: 'hash_bootstrap_partial',
+      });
+
+      await db
+        .update(districtTelegramUserbotSessions)
+        .set({ apiHashIv: null })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+      const sendCodeCalls: Array<{ phoneNumber: string; apiId: string; apiHash: string }> = [];
+      const authClient = {
+        async sendCode(phoneNumber: string, apiId: string, apiHash: string) {
+          sendCodeCalls.push({ phoneNumber, apiId, apiHash });
+          return { phoneCodeHash: 'partial_hash' };
+        },
+        async signIn() {
+          return { sessionString: 'partial_session_str' };
+        },
+        async signInWithPassword() {
+          return { sessionString: 'partial_session_str' };
+        },
+      };
+
+      try {
+        await expect(
+          bootstrapUserbotSession(db, {
+            districtId,
+            getPhoneCode: async () => '12345',
+            authClient,
+          }),
+        ).rejects.toThrow(UserbotApiHashEnvelopeCorruptError);
+
+        // The corrupt row never reaches the protocol handshake.
+        expect(sendCodeCalls).toHaveLength(0);
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
+    });
+
+    it('The preflight scan reports the session envelope and flags a corrupt session row', async () => {
+      const baseline = await verifyApiHashEnvelopes(db);
+
+      const districtId = await createTestDistrict('PreflightSessionCorrupt');
+      try {
+        await createDistrictUserbotSession(db, {
+          districtId,
+          phoneNumber: '+998901119937',
+          apiId: '1119937',
+          apiHash: 'hash_preflight_session',
+          sessionString: '1ApW_preflight_session_secret',
+        });
+
+        await db
+          .update(districtTelegramUserbotSessions)
+          .set({ sessionTag: null })
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+        const report = await verifyApiHashEnvelopes(db);
+
+        // The session envelope is reported independently of the apiHash envelope.
+        expect(report.session.partialCount).toBe(baseline.session.partialCount + 1);
+        expect(report.session.partialRows.map((r) => r.districtId)).toContain(districtId);
+        expect(report.session.partialRowsTruncated).toBe(false);
+
+        // The apiHash envelope for this row is untouched, so its section does not move.
+        expect(report.partialCount).toBe(baseline.partialCount);
+      } finally {
+        await db
+          .delete(districtTelegramUserbotSessions)
+          .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+      }
     });
   });
 
@@ -2049,7 +2597,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       }
     }
 
-    it('Criterion 1: strictly uses canonical action names and defines the 7 canonical actions', () => {
+    it('Criterion 1: strictly uses canonical action names and defines the 8 canonical actions', () => {
       expect(USERBOT_SESSION_AUDIT_ACTIONS).toEqual([
         'USERBOT_SESSION_CREATED',
         'USERBOT_SESSION_ACTIVATED',
@@ -2058,6 +2606,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
         'USERBOT_SESSION_DISABLED',
         'USERBOT_SESSION_ENABLED',
         'USERBOT_SESSION_STATUS_UPDATED',
+        'USERBOT_SESSION_REVOKED',
       ]);
       for (const action of USERBOT_SESSION_AUDIT_ACTIONS) {
         expect(UserbotSessionAuditActionSchema.parse(action)).toBe(action);
@@ -2213,7 +2762,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
         previousStatus: 'ACTIVE',
         newStatus: 'DISABLED',
         revocationPerformed: true,
-        secretsCleared: true,
+        secretsCleared: false,
       });
 
       await enableDistrictUserbotSession(db, districtId, {
@@ -2271,7 +2820,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       expect(accountDeletedEvent!.metadata).toMatchObject({
         previousStatus: 'ACTIVE',
         newStatus: 'PENDING',
-        secretsCleared: true,
+        secretsCleared: false,
         reason: 'ACCOUNT_DELETED',
       });
     });
@@ -2352,7 +2901,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       }
     });
 
-    it('Criterion 8 & 9: disable record states revocationPerformed: boolean and secretsCleared: true', async () => {
+    it('Criterion 8 & 9: disable record states revocationPerformed: boolean and secretsCleared: false (apiHash envelope preserved)', async () => {
       const districtId = await createTestDistrict('T15DisableFields');
       await createDistrictUserbotSession(db, {
         districtId,
@@ -2383,7 +2932,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       const meta = disableAudit!.metadata as Record<string, unknown>;
       expect(typeof meta.revocationPerformed).toBe('boolean');
       expect(meta.revocationPerformed).toBe(true);
-      expect(meta.secretsCleared).toBe(true);
+      expect(meta.secretsCleared).toBe(false);
     });
 
     it('Criterion 10: a failed revocation is recorded as a failure rather than as a success', async () => {
@@ -2434,6 +2983,53 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
       expect(retrieved).toBeDefined();
       if (retrieved && retrieved.recordType === 'AUDIT_EVENT') {
         expect(retrieved.outcome).toBe('FAILURE');
+      }
+    });
+
+    it('a corrupt api-hash envelope is logged and revocation proceeds without an api-hash instead of failing silently', async () => {
+      const districtId = await createTestDistrict('CorruptApiHashRevocation');
+      await createDistrictUserbotSession(db, {
+        districtId,
+        phoneNumber: '+998902229901',
+        apiId: '2229901',
+        apiHash: 'hash_corrupt_revocation_9901',
+        sessionString: 'session_corrupt_revocation_test',
+      });
+      await enableDistrictUserbotSession(db, districtId);
+
+      // Keep the envelope structurally complete (all three fields non-empty, so the corruption
+      // assertions pass) but make the IV undecryptable, which forces decryptToken to throw inside
+      // the revocation path.
+      await db
+        .update(districtTelegramUserbotSessions)
+        .set({ apiHashIv: 'this-is-not-a-valid-12-byte-iv' })
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+      const revokerSpy = vi.fn().mockResolvedValue({
+        revocationPerformed: true,
+        revocationSuccess: true,
+      });
+      const warnSpy = vi.spyOn(logger, 'warn');
+
+      try {
+        await disableDistrictUserbotSession(db, districtId, {
+          actorId: 'po_corrupt_actor',
+          actorRole: 'PRODUCT_OWNER',
+          revoker: revokerSpy,
+        });
+
+        // Revocation still ran, and it ran without an api-hash (the intended fallback).
+        expect(revokerSpy).toHaveBeenCalledTimes(1);
+        expect(revokerSpy.mock.calls[0]![0].apiHash).toBeNull();
+
+        // The failure is observable rather than silently swallowed.
+        expect(
+          warnSpy.mock.calls.some((call) =>
+            String(call[1]).includes('proceeding without api-hash'),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
       }
     });
 
@@ -2580,6 +3176,9 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
           ),
         );
       expect(audit1).toBeDefined();
+      if (!audit1) {
+        throw new Error('Expected a USERBOT_SESSION_CREATED audit event for District 1');
+      }
       expect(audit1.metadata).not.toHaveProperty('sharedApplicationCredential');
 
       // 2. Create session for District 2 with identical apiId
@@ -2613,6 +3212,9 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
           ),
         );
       expect(audit2).toBeDefined();
+      if (!audit2) {
+        throw new Error('Expected a USERBOT_SESSION_CREATED audit event for District 2');
+      }
       expect(audit2.metadata).toMatchObject({
         sharedApplicationCredential: true,
         sharedWithDistrictId: dist1,
@@ -2639,6 +3241,9 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
         .from(districtTelegramUserbotSessions)
         .where(eq(districtTelegramUserbotSessions.districtId, districtId));
       expect(rowBefore).toBeDefined();
+      if (!rowBefore) {
+        throw new Error('Expected the userbot session row to exist before district deletion');
+      }
       expect(rowBefore.sessionEncrypted).toBeTruthy();
       expect(rowBefore.apiHashEncrypted).toBeTruthy();
       expect(rowBefore.sessionIv).toBeTruthy();

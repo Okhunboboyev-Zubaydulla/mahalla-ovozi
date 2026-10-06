@@ -15,7 +15,18 @@ import {
   districts,
   operationalIssues,
 } from '../../adapters/db/schema/index.js';
-import { getDecryptedUserbotSession } from '../userbot-session/userbot-session-service.js';
+import {
+  getDecryptedUserbotSession,
+  UserbotApiHashEnvelopeCorruptError,
+  UserbotSessionEnvelopeCorruptError,
+  type DecryptedUserbotSession,
+} from '../userbot-session/userbot-session-service.js';
+import { isUserbotSessionEnvelopeComplete } from '../userbot-session/userbot-credential-envelope.js';
+
+// The predicate now lives in the neutral envelope module (see userbot-credential-envelope.ts) so
+// the session service, the preflight CLI and this manager share one implementation of the
+// three-state rule. It is re-exported here because it has long been part of this module's surface.
+export { isUserbotSessionEnvelopeComplete };
 import { recordAuditEvent } from '../audit/audit-service.js';
 import { logger } from '../../utils/logger.js';
 import type {
@@ -25,9 +36,14 @@ import type {
 } from './userbot-client-port.js';
 import { createDefaultUserbotClientFactory } from '../../adapters/telegram/userbot-client-adapter.js';
 import { classifyTelegramSignal } from '../../adapters/telegram/telegram-signal-classifier.js';
+import type { UserbotAuditAction } from '@mahalla-ovozi/api-contracts';
 import { UserbotRuntimeCompositionError } from './userbot-runtime-composition.js';
 import { normalizeMtprotoUpdate } from '../../adapters/telegram/mtproto-normalizer.js';
 import { processUserbotIngestEnvelope } from '../telegram-intake/telegram-intake-service.js';
+import {
+  parseUserbotUpdatePosition,
+  isNewerUserbotUpdatePosition,
+} from './update-position.js';
 
 export interface UserbotConnectionManagerOptions {
   db: DbClient;
@@ -103,7 +119,14 @@ export function isOlderLibraryPosition(raw: string | null): boolean {
     } else {
       return true;
     }
-  } catch {
+  } catch (parseErr: unknown) {
+    // A position that cannot be parsed is treated as an older-library position (the caller then
+    // discards it and records a gap notice), but the parse failure is logged rather than silently
+    // swallowed so an unexpected stored shape is still observable. Control flow is unchanged.
+    logger.warn(
+      { err: parseErr, rawPosition: raw },
+      'Stored userbot update position is not valid JSON; treating it as an older-library position',
+    );
     return true;
   }
   return false;
@@ -137,12 +160,20 @@ export class UserbotConnectionManager {
   private readonly bannedDistricts: Set<string> = new Set();
   private readonly authKeyDuplicatedDistricts: Set<string> = new Set();
   private readonly deletedAccountDistricts: Set<string> = new Set();
+  private readonly sessionRevokedDistricts: Set<string> = new Set();
   private readonly activeDistrictIds: Set<string> = new Set();
   private readonly connectingDistricts: Set<string> = new Set();
   private readonly activeSessionKeys: Map<string, string> = new Map(); // sessionHash -> districtId
   private readonly districtToSessionHash: Map<string, string> = new Map(); // districtId -> sessionHash
   private readonly gapNotices: Map<string, GapNotice> = new Map();
   private readonly unrecoverableGapDistricts: Set<string> = new Set();
+  /**
+   * Districts whose message handler is currently awaiting persistence. The client's live update
+   * position is only safe to capture while this set does not contain the district, because an
+   * outstanding await is exactly the window in which the live position can run ahead of the
+   * updates that have actually been persisted.
+   */
+  private readonly districtsCapturingAtReceive: Set<string> = new Set();
 
   private lastSeenTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -233,6 +264,18 @@ export class UserbotConnectionManager {
 
     const activeDistrictIds = new Set(activeRows.map((row) => row.districtId));
 
+    // Revocation recoverability, worker-local: a revoked district is unblocked only when THIS
+    // process observes its stored session legitimately re-established (complete envelope on a row
+    // that is ACTIVE again after a successful re-login/bootstrap). The guard is cleared here and
+    // nowhere else: the API process that performs the re-login holds no reference to this Set, so
+    // clearing it from there would be cross-process dead code that only ever passed in tests.
+    //
+    // Asymmetry with the sibling guards: banned, auth-key-duplicated and deleted-account districts
+    // are terminal and must stay blocked forever, so they are deliberately never cleared. A revoked
+    // session is the one terminal-looking state an operator can genuinely repair by re-login, so
+    // only this set becomes recoverable. Do not 'fix' the siblings into consistency with it.
+    await this.clearReestablishedRevocations();
+
     // 1. Teardown any managed clients no longer active or eligible in the database
     const trackedDistricts = new Set([
       ...this.clients.keys(),
@@ -255,7 +298,8 @@ export class UserbotConnectionManager {
       if (
         this.bannedDistricts.has(districtId) ||
         this.authKeyDuplicatedDistricts.has(districtId) ||
-        this.deletedAccountDistricts.has(districtId)
+        this.deletedAccountDistricts.has(districtId) ||
+        this.sessionRevokedDistricts.has(districtId)
       ) {
         continue;
       }
@@ -263,6 +307,46 @@ export class UserbotConnectionManager {
         continue;
       }
       await this.connectDistrict(districtId);
+    }
+  }
+
+  /**
+   * Clears the revocation guard for every district whose stored session has been legitimately
+   * re-established, so reconnection becomes possible again without a process restart.
+   *
+   * A district stays guarded while its stored session is still invalid: a missing row, a
+   * non-ACTIVE status (the revocation handler leaves it PENDING), an all-NULL credential envelope,
+   * or a partially populated one. Only a complete envelope on an ACTIVE row counts as recovered.
+   */
+  private async clearReestablishedRevocations(): Promise<void> {
+    if (this.sessionRevokedDistricts.size === 0) {
+      return;
+    }
+
+    for (const districtId of Array.from(this.sessionRevokedDistricts)) {
+      const [row] = await this.db
+        .select({
+          status: districtTelegramUserbotSessions.status,
+          sessionEncrypted: districtTelegramUserbotSessions.sessionEncrypted,
+          sessionIv: districtTelegramUserbotSessions.sessionIv,
+          sessionTag: districtTelegramUserbotSessions.sessionTag,
+          apiHashEncrypted: districtTelegramUserbotSessions.apiHashEncrypted,
+          apiHashIv: districtTelegramUserbotSessions.apiHashIv,
+          apiHashTag: districtTelegramUserbotSessions.apiHashTag,
+        })
+        .from(districtTelegramUserbotSessions)
+        .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+        .limit(1);
+
+      if (!row || row.status !== 'ACTIVE' || !isUserbotSessionEnvelopeComplete(row)) {
+        continue;
+      }
+
+      this.sessionRevokedDistricts.delete(districtId);
+      logger.info(
+        { districtId },
+        'Userbot session re-established in the database; revocation guard cleared so reconnection can resume',
+      );
     }
   }
 
@@ -276,7 +360,8 @@ export class UserbotConnectionManager {
       this.isStopping ||
       this.bannedDistricts.has(districtId) ||
       this.authKeyDuplicatedDistricts.has(districtId) ||
-      this.deletedAccountDistricts.has(districtId)
+      this.deletedAccountDistricts.has(districtId) ||
+      this.sessionRevokedDistricts.has(districtId)
     ) {
       return;
     }
@@ -321,7 +406,37 @@ export class UserbotConnectionManager {
         return;
       }
 
-      const session = await getDecryptedUserbotSession(this.db, districtId);
+      // A corrupt stored credential envelope is a per-district data fault, so it must not abort the
+      // connection cycle for every other district. Both envelope faults are caught here because
+      // getDecryptedUserbotSession now reads the session triple as well as the apiHash triple; an
+      // uncaught session-envelope fault would take down the whole cycle. Each is logged loudly,
+      // naming which credential is corrupt, and the district is skipped; every other error still
+      // propagates unchanged.
+      //
+      // Scope: those catches cover PARTIAL envelopes only, which is all getDecryptedUserbotSession
+      // raises. An all-whitespace triple classifies as ABSENT there, so it is not an error at this
+      // layer: the session simply decrypts to null and the missing-session branch below returns.
+      let session: DecryptedUserbotSession | null;
+      try {
+        session = await getDecryptedUserbotSession(this.db, districtId);
+      } catch (decryptErr: unknown) {
+        if (decryptErr instanceof UserbotApiHashEnvelopeCorruptError) {
+          logger.error(
+            { districtId, err: decryptErr },
+            'Cannot connect userbot: stored apiHash credential envelope is corrupt; district skipped',
+          );
+          return;
+        }
+        if (decryptErr instanceof UserbotSessionEnvelopeCorruptError) {
+          logger.error(
+            { districtId, err: decryptErr },
+            'Cannot connect userbot: stored session credential envelope is corrupt; district skipped',
+          );
+          return;
+        }
+        throw decryptErr;
+      }
+
       if (!session || !session.sessionString) {
         logger.warn(
           { districtId },
@@ -442,7 +557,8 @@ export class UserbotConnectionManager {
           !this.isStopping &&
           !this.bannedDistricts.has(districtId) &&
           !this.authKeyDuplicatedDistricts.has(districtId) &&
-          !this.deletedAccountDistricts.has(districtId)
+          !this.deletedAccountDistricts.has(districtId) &&
+          !this.sessionRevokedDistricts.has(districtId)
         ) {
           this.scheduleReconnection(districtId);
         }
@@ -487,8 +603,13 @@ export class UserbotConnectionManager {
         logger.info({ districtId, category: signal.category }, 'Userbot client typed signal event');
         await this.handleSignal(districtId, signal, { isConnected: client.isConnected() });
       });
-    } catch {
-      // Mock client might not implement signal event
+    } catch (subscribeErr: unknown) {
+      // Mock clients may not implement the signal event; that is expected and benign,
+      // but the failure is logged so a real client silently missing the subscription is visible.
+      logger.debug(
+        { districtId, err: subscribeErr },
+        'Userbot client does not implement signal event subscription',
+      );
     }
 
     client.on('ban', (err?: unknown) => {
@@ -510,57 +631,129 @@ export class UserbotConnectionManager {
     }
 
     client.on('message', async (update: unknown) => {
+      // Captured synchronously, before this handler's first await, and only while no other
+      // update for this district is already in flight. The client's live position is captured
+      // in the same synchronous step in which it hands over the update, so it covers exactly
+      // this update and never a later one.
+      let receivePosition: string | null = null;
+      let positionCaptured = false;
+      if (!this.districtsCapturingAtReceive.has(districtId)) {
+        receivePosition = client.getUpdatePosition?.() ?? null;
+        positionCaptured = receivePosition !== null;
+      }
+      this.districtsCapturingAtReceive.add(districtId);
       try {
         await this.recordInboundUpdate(districtId);
         const rawType = (update as Record<string, unknown>)?._ || (update as Record<string, unknown>)?.className;
         const signal = classifyTelegramSignal(rawType || update);
-        if (signal.category === 'UNRECOVERABLE_GAP') {
-          await this.handleUnrecoverableGap(districtId, {
-            reason: signal.reason,
-            lastKnownPosition: client.getUpdatePosition?.(),
-          });
-        }
-        const result = normalizeMtprotoUpdate(update);
-        if (result.status === 'NORMALIZED') {
-          // Defensive boundary check. The runtime composition guard makes this unreachable in a
-          // correctly composed process, but if the invariant is ever violated the failure must
-          // be loud and immediate: silently returning here is the silent-loss mechanism this
-          // transport exists to remove.
-          if (!this.pool || !this.boss) {
-            throw new UserbotRuntimeCompositionError(
-              `Userbot message for district ${districtId} cannot be ingested: ` +
-                'the database pool or the job-queue client is not configured on UserbotConnectionManager.',
+        // A gap carried by this update cannot be raised here: whether this pass recovers is not
+        // known until the ingest below has run, and the recovery decision lives after that. Raising
+        // now would be undone by a recovering pass and immediately re-instated by the recovery
+        // block, while a gap arriving on an already-flagged District must still refresh its
+        // Operational Issue. The raise is therefore deferred to the end of this pass.
+        const pendingGapSignal: ClassifiedUserbotSignal | null =
+          signal.category === 'UNRECOVERABLE_GAP' ? signal : null;
+        // Set below, and only by the proven-successful ingest block. It records THIS pass's
+        // outcome, which is the only thing the deferred raise may consult: the in-memory flag is
+        // not equivalent, because a pass that recovers a never-flagged District leaves that flag
+        // false for the whole pass and would otherwise be mistaken for a non-recovering one.
+        let recoveredThisPass = false;
+        // Guards the single exit point below so the deferred raise happens exactly once per pass.
+        let deferredGapRaiseDone = false;
+        // The deferred raise must survive the throwing regions of this pass: normalizeMtprotoUpdate,
+        // processUserbotIngestEnvelope, and a rethrown UserbotRuntimeCompositionError would otherwise
+        // drop a legitimate gap signal carried by this update without ever raising it. The finally on
+        // this try is the single exit point, so the raise always runs when the pass did not recover.
+        try {
+          const result = normalizeMtprotoUpdate(update);
+          if (result.status === 'NORMALIZED') {
+            // Defensive boundary check. The runtime composition guard makes this unreachable in a
+            // correctly composed process, but if the invariant is ever violated the failure must
+            // be loud and immediate: silently returning here is the silent-loss mechanism this
+            // transport exists to remove.
+            if (!this.pool || !this.boss) {
+              throw new UserbotRuntimeCompositionError(
+                `Userbot message for district ${districtId} cannot be ingested: ` +
+                  'the database pool or the job-queue client is not configured on UserbotConnectionManager.',
+              );
+            }
+            const ingestResult = await processUserbotIngestEnvelope(
+              this.pool,
+              this.boss,
+              districtId,
+              result.envelope,
+            );
+
+            if (
+              ingestResult.status === 'ACCEPTED' ||
+              ingestResult.status === 'UPDATED' ||
+              ingestResult.status === 'DUPLICATE'
+            ) {
+              recoveredThisPass = true;
+              try {
+                // The position persisted is the one captured when this update arrived, never the
+                // client's live position at this later point: the live value can already cover
+                // updates that have not been persisted, and advancing to it would make Telegram
+                // skip them forever after a restart.
+                if (positionCaptured && receivePosition !== null) {
+                  await this.advanceUpdatePosition(districtId, receivePosition, new Date());
+                }
+              } catch (advanceErr: unknown) {
+                logger.error(
+                  { districtId, err: advanceErr },
+                  'Failed to advance userbot update position after message persistence',
+                );
+              }
+
+              // This is the first point in the pass where the ingest is PROVEN successful, so an
+              // unrecoverable gap recorded earlier is no longer the current truth: the stream is
+              // demonstrably delivering and persisting updates again. Resolving the operational-issue
+              // row is what actually clears DEGRADED, not dropping the in-memory flag: the health
+              // check falls back to the ACTIVE row and would immediately rehydrate the flag from it.
+              try {
+                if (this.hasUnrecoverableGap(districtId)) {
+                  await this.clearUnrecoverableGap(districtId);
+                  logger.info(
+                    { districtId },
+                    'Unrecoverable gap cleared after a successful userbot ingest; awareness is complete again.',
+                  );
+                }
+              } catch (recoveryErr: unknown) {
+                logger.error(
+                  { districtId, err: recoveryErr },
+                  'Failed to clear the unrecoverable gap after a successful userbot ingest',
+                );
+              }
+            }
+          } else {
+            logger.debug(
+              { districtId, reason: result.reason },
+              'Dropped incoming MTProto update during normalization',
             );
           }
-          const ingestResult = await processUserbotIngestEnvelope(
-            this.pool,
-            this.boss,
-            districtId,
-            result.envelope,
-          );
-
-          if (
-            ingestResult.status === 'ACCEPTED' ||
-            ingestResult.status === 'UPDATED' ||
-            ingestResult.status === 'DUPLICATE'
-          ) {
+        } finally {
+          // Deferred raise for this pass, decided by the outcome that has just been established.
+          // A pass that recovered -- it reached the proven-successful ingest block, which is the
+          // single owner of recovery -- must not raise, or it would immediately contradict the clear
+          // that block just performed. Every other pass raises exactly as before, whether or not the
+          // District was already flagged, and whether the pass completed or threw. The stream-level
+          // signal/error/disconnect paths are untouched and remain unconditionally raising.
+          if (pendingGapSignal !== null && !recoveredThisPass && !deferredGapRaiseDone) {
+            deferredGapRaiseDone = true;
             try {
-              const latestPos = client.getUpdatePosition?.();
-              if (latestPos) {
-                await this.advanceUpdatePosition(districtId, latestPos);
-              }
-            } catch (advanceErr: unknown) {
+              await this.handleUnrecoverableGap(districtId, {
+                reason: pendingGapSignal.reason,
+                lastKnownPosition: client.getUpdatePosition?.(),
+              });
+            } catch (gapRaiseErr: unknown) {
+              // A failure to raise must never mask the pass's own error, which propagates from the
+              // try above: the raise is reported and the original outcome is left intact.
               logger.error(
-                { districtId, err: advanceErr },
-                'Failed to advance userbot update position after message persistence',
+                { districtId, err: gapRaiseErr },
+                'Failed to raise the unrecoverable gap for this pass',
               );
             }
           }
-        } else {
-          logger.debug(
-            { districtId, reason: result.reason },
-            'Dropped incoming MTProto update during normalization',
-          );
         }
       } catch (err: unknown) {
         // A broken runtime composition is not a per-message failure: the process cannot ingest
@@ -583,6 +776,10 @@ export class UserbotConnectionManager {
           { districtId, err },
           'Error processing incoming userbot message event',
         );
+      } finally {
+        // Released on every path, including the rethrown composition error, so a district can
+        // never be left permanently unable to capture a position at receive time.
+        this.districtsCapturingAtReceive.delete(districtId);
       }
     });
   }
@@ -595,7 +792,8 @@ export class UserbotConnectionManager {
       this.isStopping ||
       this.bannedDistricts.has(districtId) ||
       this.authKeyDuplicatedDistricts.has(districtId) ||
-      this.deletedAccountDistricts.has(districtId)
+      this.deletedAccountDistricts.has(districtId) ||
+      this.sessionRevokedDistricts.has(districtId)
     ) {
       return;
     }
@@ -623,7 +821,8 @@ export class UserbotConnectionManager {
         this.isStopping ||
         this.bannedDistricts.has(districtId) ||
         this.authKeyDuplicatedDistricts.has(districtId) ||
-        this.deletedAccountDistricts.has(districtId)
+        this.deletedAccountDistricts.has(districtId) ||
+        this.sessionRevokedDistricts.has(districtId)
       ) {
         return;
       }
@@ -756,7 +955,7 @@ export class UserbotConnectionManager {
       districtId,
       actorId: 'system:userbot-manager',
       actorRole: 'SYSTEM',
-      action: 'USERBOT_SESSION_BANNED',
+      action: 'USERBOT_SESSION_BANNED' satisfies UserbotAuditAction,
       metadata: {
         districtId,
         previousStatus,
@@ -872,7 +1071,7 @@ export class UserbotConnectionManager {
       districtId,
       actorId: 'system:userbot-manager',
       actorRole: 'SYSTEM',
-      action: 'USERBOT_SESSION_AUTH_KEY_DUPLICATED',
+      action: 'USERBOT_SESSION_AUTH_KEY_DUPLICATED' satisfies UserbotAuditAction,
       metadata: {
         districtId,
         previousStatus,
@@ -928,6 +1127,140 @@ export class UserbotConnectionManager {
   }
 
   /**
+   * Handles Telegram SESSION_REVOKED (session invalidated, authorised elsewhere, or auth key unregistered):
+   * - Halts reconnection immediately; a revoked session can never be restored by retrying.
+   * - Idempotent: a repeat delivery for the same district is a cheap no-op.
+   * - Disconnects client and deregisters auth key.
+   * - Transitions session status in DB to PENDING (requiring re-login).
+   * - Emits USERBOT_SESSION_REVOKED audit log.
+   * - Creates an active Operational Issue in operational_issues scoped to DISTRICT.
+   */
+  async handleSessionRevoked(districtId: string, error?: unknown): Promise<void> {
+    // Idempotency guard: the adapter emits both a typed 'signal' event and an 'error' event for
+    // the same failure, and connectDistrict's own catch also routes here. Every arrival after
+    // the first must be a no-op so no duplicate issue is raised and no state is reset.
+    if (this.sessionRevokedDistricts.has(districtId)) {
+      return;
+    }
+    this.sessionRevokedDistricts.add(districtId);
+
+    // Cancel pending reconnection timer
+    const timer = this.reconnectTimers.get(districtId);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconnectTimers.delete(districtId);
+    }
+    this.reconnectAttempts.delete(districtId);
+    this.floodWaitAttempts.delete(districtId);
+    // Mirrors handleAccountDeleted and disconnectDistrict: the district is no longer managed here,
+    // so the active-registry entry must go too rather than lingering as stale state.
+    this.activeDistrictIds.delete(districtId);
+
+    // Deregister auth key
+    const sessionHash = this.districtToSessionHash.get(districtId);
+    if (sessionHash) {
+      this.activeSessionKeys.delete(sessionHash);
+      this.districtToSessionHash.delete(districtId);
+    }
+
+    // Disconnect and remove client
+    const client = this.clients.get(districtId);
+    if (client) {
+      this.clients.delete(districtId);
+      try {
+        await client.disconnect();
+      } catch (err: unknown) {
+        logger.warn({ districtId, err }, 'Error disconnecting client on session revoked');
+      }
+    }
+
+    // Query current session row from DB
+    const [existing] = await this.db
+      .select({ status: districtTelegramUserbotSessions.status })
+      .from(districtTelegramUserbotSessions)
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+      .limit(1);
+
+    const previousStatus = existing?.status ?? null;
+
+    // 1. Transition session status to PENDING (requires re-login).
+    //
+    // The session ciphertext triple and the apiHash envelope are deliberately LEFT INTACT here.
+    // The revocation guard is cleared only when clearReestablishedRevocations observes a complete
+    // envelope on a row that is ACTIVE again, so wiping the stored envelope would make the row
+    // permanently unrecoverable: the re-login the operator is told to perform could never satisfy
+    // the recovery predicate. Clearing the credentials is the kill switch's job
+    // (disableDistrictUserbotSession), not revocation's - do not add clearing here.
+    await this.db
+      .update(districtTelegramUserbotSessions)
+      .set({
+        status: 'PENDING',
+        updatedAt: new Date(),
+      })
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+    // 2. Emit audit event.
+    await recordAuditEvent(this.db, {
+      districtId,
+      actorId: 'system:userbot-manager',
+      actorRole: 'SYSTEM',
+      action: 'USERBOT_SESSION_REVOKED' satisfies UserbotAuditAction,
+      metadata: {
+        districtId,
+        previousStatus,
+        newStatus: 'PENDING',
+        reason: 'USERBOT_SESSION_REVOKED',
+        error: error instanceof Error ? error.message : String(error ?? 'USERBOT_SESSION_REVOKED'),
+      },
+    });
+
+    // 3. Create active Operational Issue
+    const now = new Date();
+    const logicalKey = `DISTRICT:${districtId}:USERBOT:USERBOT_SESSION_REVOKED`;
+    const metadata: Record<string, unknown> = {
+      errorCode: 'USERBOT_SESSION_REVOKED',
+      districtId,
+    };
+
+    await this.db
+      .insert(operationalIssues)
+      .values({
+        id: `iss_${crypto.randomUUID()}`,
+        logicalKey,
+        scope: 'DISTRICT',
+        districtId,
+        component: 'USERBOT',
+        issueCategory: 'USERBOT_SESSION_REVOKED',
+        severity: 'Critical',
+        status: 'ACTIVE',
+        healthStatus: 'Unavailable',
+        sanitizedTitle: 'Telegram userbot сессияси бекор қилинди (сессия ўчирилган)',
+        sanitizedDescription: 'Туман Telegram userbot сессияси Telegram томонидан бекор қилинди: сессия ўчирилган, бошқа жойда тасдиқланган ёки auth key рўйхатдан чиқарилган. Қайта кириш талаб этилади.',
+        recommendedAction: 'VPS да CLI орқали сессияга қайта киринг (re-login).',
+        targetRoute: `/telegram-setup?districtId=${districtId}`,
+        metadata,
+        startedAt: now,
+        latestCheckAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: operationalIssues.logicalKey,
+        targetWhere: sql`${operationalIssues.status} = 'ACTIVE'`,
+        set: {
+          latestCheckAt: now,
+          updatedAt: now,
+          metadata: sql`COALESCE(${operationalIssues.metadata}, '{}'::jsonb) || ${JSON.stringify(metadata)}::jsonb`,
+        },
+      });
+
+    logger.error(
+      { districtId },
+      'Userbot session revoked: status transitioned to PENDING, audit log emitted, operational issue created, reconnection halted.',
+    );
+  }
+
+  /**
    * Handles first abnormal signal (FLOOD_WAIT, PEER_FLOOD, account restrictions):
    * Raises a District-scoped Operational Issue alert before ban.
    */
@@ -940,7 +1273,7 @@ export class UserbotConnectionManager {
       districtId,
       actorId: 'system:userbot-manager',
       actorRole: 'SYSTEM',
-      action: 'USERBOT_ABNORMAL_SIGNAL',
+      action: 'USERBOT_ABNORMAL_SIGNAL' satisfies UserbotAuditAction,
       metadata: {
         districtId,
         signalType: signal.signalType,
@@ -1003,7 +1336,8 @@ export class UserbotConnectionManager {
       this.isStopping ||
       this.bannedDistricts.has(districtId) ||
       this.authKeyDuplicatedDistricts.has(districtId) ||
-      this.deletedAccountDistricts.has(districtId)
+      this.deletedAccountDistricts.has(districtId) ||
+      this.sessionRevokedDistricts.has(districtId)
     ) {
       return;
     }
@@ -1042,7 +1376,8 @@ export class UserbotConnectionManager {
         this.isStopping ||
         this.bannedDistricts.has(districtId) ||
         this.authKeyDuplicatedDistricts.has(districtId) ||
-        this.deletedAccountDistricts.has(districtId)
+        this.deletedAccountDistricts.has(districtId) ||
+        this.sessionRevokedDistricts.has(districtId)
       ) {
         return;
       }
@@ -1106,6 +1441,12 @@ export class UserbotConnectionManager {
 
       case 'AUTH_KEY_DUPLICATED':
         await this.handleAuthKeyDuplicated(districtId, signal.error ?? signal.reason);
+        break;
+
+      case 'SESSION_REVOKED':
+        // The session is dead on Telegram's side: retrying cannot restore it, so reconnection is
+        // deliberately never scheduled for this category.
+        await this.handleSessionRevoked(districtId, signal.error ?? signal.reason);
         break;
 
       case 'ACCOUNT_BANNED':
@@ -1247,12 +1588,12 @@ export class UserbotConnectionManager {
       districtId,
       actorId: 'system:userbot-manager',
       actorRole: 'SYSTEM',
-      action: 'USERBOT_SESSION_STATUS_UPDATED',
+      action: 'USERBOT_SESSION_STATUS_UPDATED' satisfies UserbotAuditAction,
       metadata: {
         districtId,
         previousStatus,
         newStatus: 'PENDING',
-        secretsCleared: true,
+        secretsCleared: false,
         reason: 'ACCOUNT_DELETED',
         error: error instanceof Error ? error.message : String(error ?? 'ACCOUNT_DELETED'),
       },
@@ -1375,7 +1716,7 @@ export class UserbotConnectionManager {
       districtId,
       actorId: 'system:userbot-manager',
       actorRole: 'SYSTEM',
-      action: 'USERBOT_UNRECOVERABLE_GAP_DETECTED',
+      action: 'USERBOT_UNRECOVERABLE_GAP_DETECTED' satisfies UserbotAuditAction,
       metadata: {
         districtId,
         lastKnownGoodPosition: lastKnownGoodPosition ?? null,
@@ -1443,7 +1784,8 @@ export class UserbotConnectionManager {
         this.activeDistrictIds.has(districtId) &&
         !this.bannedDistricts.has(districtId) &&
         !this.authKeyDuplicatedDistricts.has(districtId) &&
-        !this.deletedAccountDistricts.has(districtId)
+        !this.deletedAccountDistricts.has(districtId) &&
+        !this.sessionRevokedDistricts.has(districtId)
       ) {
         connectedDistricts.push(districtId);
       }
@@ -1480,7 +1822,7 @@ export class UserbotConnectionManager {
    * Evaluates whether an ACTIVE, connected session has received nothing for an implausibly long period.
    * If so, flags it in DB (is_stale = true) and raises a District-scoped Operational Issue.
    */
-  async evaluateStaleness(districtId: string, asOfDate: Date = new Date()): Promise<boolean> {
+  async evaluateStaleness(districtId: string, asOfDate: Date): Promise<boolean> {
     const [session] = await this.db
       .select({
         status: districtTelegramUserbotSessions.status,
@@ -1631,7 +1973,8 @@ export class UserbotConnectionManager {
       this.activeDistrictIds.has(districtId) &&
       !this.bannedDistricts.has(districtId) &&
       !this.authKeyDuplicatedDistricts.has(districtId) &&
-      !this.deletedAccountDistricts.has(districtId),
+      !this.deletedAccountDistricts.has(districtId) &&
+      !this.sessionRevokedDistricts.has(districtId),
     );
 
     if (!isConnected) {
@@ -1647,7 +1990,7 @@ export class UserbotConnectionManager {
       };
     }
 
-    const isStale = await this.evaluateStaleness(districtId);
+    const isStale = await this.evaluateStaleness(districtId, new Date());
 
     if (isStale) {
       return {
@@ -1804,7 +2147,8 @@ export class UserbotConnectionManager {
         this.activeDistrictIds.has(districtId) &&
         !this.bannedDistricts.has(districtId) &&
         !this.authKeyDuplicatedDistricts.has(districtId) &&
-        !this.deletedAccountDistricts.has(districtId)
+        !this.deletedAccountDistricts.has(districtId) &&
+        !this.sessionRevokedDistricts.has(districtId)
       ) {
         connected.push(districtId);
       }
@@ -1818,6 +2162,7 @@ export class UserbotConnectionManager {
       this.bannedDistricts.has(districtId) ||
       this.authKeyDuplicatedDistricts.has(districtId) ||
       this.deletedAccountDistricts.has(districtId) ||
+      this.sessionRevokedDistricts.has(districtId) ||
       !this.activeDistrictIds.has(districtId)
     ) {
       return false;
@@ -1842,6 +2187,10 @@ export class UserbotConnectionManager {
     return this.deletedAccountDistricts.has(districtId);
   }
 
+  isDistrictSessionRevoked(districtId: string): boolean {
+    return this.sessionRevokedDistricts.has(districtId);
+  }
+
   async getInboundUpdateCount(districtId: string): Promise<number> {
     const [row] = await this.db
       .select({ count: districtTelegramUserbotSessions.inboundUpdateCounter })
@@ -1860,11 +2209,52 @@ export class UserbotConnectionManager {
     return row?.lastSuccessfulConnectionAt ?? null;
   }
 
+  /**
+   * Writes a new update position, but only when it is strictly newer than the one already
+   * stored, so a stale or regressed position can never overwrite a newer one. Returns whether
+   * the write happened.
+   *
+   * The comparison reads the stored value first: an unreadable stored value (absent, malformed,
+   * or written by a different version) carries no comparable ordering, so the new position is
+   * accepted and replaces it rather than throwing away a valid advance. The next position is
+   * persisted in the same statement as the advanced-at timestamp, so the two can never disagree.
+   */
   async advanceUpdatePosition(
     districtId: string,
     updatePosition: string,
-    advancedAt: Date = new Date(),
-  ): Promise<void> {
+    advancedAt: Date,
+  ): Promise<boolean> {
+    const [existing] = await this.db
+      .select({ updatePosition: districtTelegramUserbotSessions.updatePosition })
+      .from(districtTelegramUserbotSessions)
+      .where(eq(districtTelegramUserbotSessions.districtId, districtId))
+      .limit(1);
+
+    if (!existing) {
+      throw new Error(
+        `Cannot advance the userbot update position for district ${districtId}: ` +
+          'no district_telegram_userbot_sessions row exists for this district.',
+      );
+    }
+
+    const candidate = parseUserbotUpdatePosition(updatePosition);
+    if (candidate === null) {
+      throw new Error(
+        `Cannot advance the userbot update position for district ${districtId}: ` +
+          `the supplied position ${JSON.stringify(updatePosition)} is not a valid ` +
+          'teleproto-v1 update position.',
+      );
+    }
+
+    const stored = parseUserbotUpdatePosition(existing.updatePosition);
+    if (!isNewerUserbotUpdatePosition(stored, candidate)) {
+      logger.debug(
+        { districtId, storedPosition: existing.updatePosition, candidatePosition: updatePosition },
+        'Ignored a userbot update position that is not newer than the stored one',
+      );
+      return false;
+    }
+
     await this.db
       .update(districtTelegramUserbotSessions)
       .set({
@@ -1873,6 +2263,8 @@ export class UserbotConnectionManager {
         updatedAt: advancedAt,
       })
       .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+    return true;
   }
 
   async getUpdatePosition(districtId: string): Promise<string | null> {
