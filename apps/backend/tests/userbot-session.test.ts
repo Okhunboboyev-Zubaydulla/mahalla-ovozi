@@ -3025,7 +3025,7 @@ describe('District Userbot Session Record & Kill Switch Integration Tests (Ticke
         // The failure is observable rather than silently swallowed.
         expect(
           warnSpy.mock.calls.some((call) =>
-            String(call[1]).includes('proceeding without api-hash'),
+            String(call.at(1)).includes('proceeding without api-hash'),
           ),
         ).toBe(true);
       } finally {

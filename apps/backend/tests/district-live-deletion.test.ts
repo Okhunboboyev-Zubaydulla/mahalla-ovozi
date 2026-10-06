@@ -521,7 +521,7 @@ describe('Story 6.4: Execute Permanent Live-System District Deletion Integration
 
       const survivingUserbot = await db.select().from(districtTelegramUserbotSessions).where(eq(districtTelegramUserbotSessions.districtId, survivor.districtId));
       expect(survivingUserbot.length).toBe(1);
-      expect(survivingUserbot[0].status).toBe('ACTIVE');
+      expect(survivingUserbot[0]!.status).toBe('ACTIVE');
     });
   });
 

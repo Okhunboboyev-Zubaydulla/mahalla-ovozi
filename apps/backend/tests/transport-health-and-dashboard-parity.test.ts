@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import crypto from 'node:crypto';
-import { eq, or, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { createDbPool, createDbClient, type DbClient } from '../src/adapters/db/client.js';
 import { buildHttpServer } from '../src/entrypoints/http.js';
 import {
@@ -22,7 +22,6 @@ import { hashPassword } from '../src/adapters/crypto/argon2.js';
 import { COOKIE_NAME } from '../src/modules/auth/session-manager.js';
 import { getTashkentCalendarDay } from '../src/modules/telegram-intake/timezone-util.js';
 import { encryptToken } from '../src/adapters/crypto/token-cipher.js';
-import type { QualifyingLane } from '@mahalla-ovozi/api-contracts';
 import {
   UserbotConnectionManager,
   type UserbotClientPort,
@@ -648,8 +647,8 @@ describe('Ticket 22: Operator-Visible Transport Health and Dashboard Parity Inte
     const lanes = body.lanes as Record<string, { topics: Array<{ id: string }> }>;
 
     // userbotTopicId was projected into ['HOKIM_RELATED', 'WATER']
-    const inHokimRelated = lanes.HOKIM_RELATED.topics.some((t) => t.id === userbotTopicId);
-    const inWater = lanes.WATER.topics.some((t) => t.id === userbotTopicId);
+    const inHokimRelated = lanes.HOKIM_RELATED!.topics.some((t) => t.id === userbotTopicId);
+    const inWater = lanes.WATER!.topics.some((t) => t.id === userbotTopicId);
 
     expect(inHokimRelated).toBe(true);
     expect(inWater).toBe(true);

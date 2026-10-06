@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   GramJsUserbotAuthClient,
   UserbotAuthError,
-  PhoneNumberBannedError,
   InvalidPhoneCodeError,
   Invalid2FAPasswordError,
 } from '../src/adapters/telegram/userbot-auth-client.js';

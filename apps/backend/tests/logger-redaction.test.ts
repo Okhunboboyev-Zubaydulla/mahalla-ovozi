@@ -1,9 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import Fastify from 'fastify';
 import {
   serializeError,
   safeJsonStringify,
-  MAX_CAUSE_DEPTH,
   logger,
   type SerializedError,
 } from '../src/utils/logger.js';
@@ -378,7 +377,7 @@ describe('Log Redaction Allowlist (Decision 5.3)', () => {
   describe('StructuredLogger stream integration', () => {
     let originalTestLogs: string | undefined;
     let stderrOutput: string[] = [];
-    let stderrSpy: ReturnType<typeof vi.spyOn>;
+    let stderrSpy: MockInstance<typeof process.stderr.write>;
 
     beforeEach(() => {
       originalTestLogs = process.env.TEST_LOGS;
@@ -405,7 +404,7 @@ describe('Log Redaction Allowlist (Decision 5.3)', () => {
       logger.error({ err }, 'Telegram transport connection failed');
 
       expect(stderrOutput.length).toBe(1);
-      const parsed = JSON.parse(stderrOutput[0]);
+      const parsed = JSON.parse(stderrOutput[0]!);
 
       expect(parsed.level).toBe('error');
       expect(parsed.msg).toBe('Telegram transport connection failed');
@@ -426,7 +425,7 @@ describe('Log Redaction Allowlist (Decision 5.3)', () => {
       logger.error({ err: { reason: 'peer_flood', wait: 60 } }, 'Peer flood detected');
 
       expect(stderrOutput.length).toBe(1);
-      const parsed = JSON.parse(stderrOutput[0]);
+      const parsed = JSON.parse(stderrOutput[0]!);
 
       expect(parsed.err).toEqual({
         value: '{"reason":"peer_flood","wait":60}',
@@ -437,7 +436,7 @@ describe('Log Redaction Allowlist (Decision 5.3)', () => {
       logger.error({ err: 'Unexpected socket drop' }, 'Worker error');
 
       expect(stderrOutput.length).toBe(1);
-      const parsed = JSON.parse(stderrOutput[0]);
+      const parsed = JSON.parse(stderrOutput[0]!);
 
       expect(parsed.err).toEqual({
         value: 'Unexpected socket drop',
@@ -453,7 +452,7 @@ describe('Log Redaction Allowlist (Decision 5.3)', () => {
       }).not.toThrow();
 
       expect(stderrOutput.length).toBe(1);
-      const parsed = JSON.parse(stderrOutput[0]);
+      const parsed = JSON.parse(stderrOutput[0]!);
       expect(parsed.err.cause).toBe('[Circular]');
     });
   });
@@ -473,7 +472,15 @@ describe('Log Redaction Allowlist (Decision 5.3)', () => {
           level: 'error',
           stream,
           serializers: {
-            err: serializeError,
+            err: (err: unknown) => {
+              const s = serializeError(err);
+              return {
+                type: s.name || 'Error',
+                message: s.message || (s.value ?? ''),
+                stack: s.stack || '',
+                ...s,
+              };
+            },
           },
         },
       });
@@ -487,7 +494,7 @@ describe('Log Redaction Allowlist (Decision 5.3)', () => {
       await server.close();
 
       expect(logLines.length).toBe(1);
-      const parsed = JSON.parse(logLines[0]);
+      const parsed = JSON.parse(logLines[0]!);
       expect(parsed.err).toBeDefined();
       expect(parsed.err.message).toBe('Unhandled route error');
       expect(parsed.err.code).toBe('ROUTE_FAILURE');

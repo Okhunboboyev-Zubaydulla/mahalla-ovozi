@@ -832,7 +832,7 @@ describe('Ticket 06: Per-Group Transport Selection Integration Tests', () => {
         await db
           .update(districtTelegramUserbotSessions)
           .set({ status: 'BANNED' })
-          .where(eq(districtTelegramUserbotSessions.id, pendingRow.id));
+          .where(eq(districtTelegramUserbotSessions.id, pendingRow!.id));
 
         const delBanned = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
         const facBanned = await resolveDistrictTransportAuthorization(db, {
@@ -847,7 +847,7 @@ describe('Ticket 06: Per-Group Transport Selection Integration Tests', () => {
         await db
           .update(districtTelegramUserbotSessions)
           .set({ status: 'DISABLED' })
-          .where(eq(districtTelegramUserbotSessions.id, pendingRow.id));
+          .where(eq(districtTelegramUserbotSessions.id, pendingRow!.id));
 
         const delDisabled = await resolveDistrictUserbotAndGroup(db, testDistrictId, chatId);
         const facDisabled = await resolveDistrictTransportAuthorization(db, {
