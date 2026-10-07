@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { DbClient, mapPostgresConstraintError } from '../../adapters/db/client.js';
 import {
   districts,
@@ -13,6 +13,7 @@ import {
 import {
   TelegramGroupMapping,
   TelegramGroupStatusSchema,
+  TelegramGroupAuditAction,
   CreateTelegramGroupRequest,
   UpdateTelegramGroupRequest,
 } from '@mahalla-ovozi/api-contracts';
@@ -133,6 +134,8 @@ export function formatTelegramGroup(row: DistrictTelegramGroup): TelegramGroupMa
     transport: row.transport,
     botMembershipStatus: row.botMembershipStatus || null,
     privacyModeDisabled: row.privacyModeDisabled,
+    isPaused: row.isPaused,
+    isPausedSkippedCount: row.isPausedSkippedCount,
     testMessageReceivedAt: row.testMessageReceivedAt ? row.testMessageReceivedAt.toISOString() : null,
     lastValidatedAt: row.lastValidatedAt ? row.lastValidatedAt.toISOString() : null,
     lastError: row.lastError || null,
@@ -587,6 +590,192 @@ export async function switchDistrictTelegramGroupTransport(
     actor,
     clientInfo,
   );
+}
+
+export interface BulkPauseStateResult {
+  groups: TelegramGroupMapping[];
+}
+
+/**
+ * One of the two operator transitions over the group pause flag. A genuine discriminated union of
+ * two bare tags rather than a boolean flag parameter, because the two directions differ in audit
+ * action, in whether the episode's skipped count is carried into the trail, and in the target
+ * state itself.
+ */
+type PauseStateTransition = { kind: 'PAUSE' } | { kind: 'RESUME' };
+
+const PAUSE_TRANSITION: PauseStateTransition = { kind: 'PAUSE' };
+
+const RESUME_TRANSITION: PauseStateTransition = { kind: 'RESUME' };
+
+const PAUSE_AUDIT_ACTION: TelegramGroupAuditAction = 'DISTRICT_GROUP_PAUSED';
+
+const RESUME_AUDIT_ACTION: TelegramGroupAuditAction = 'DISTRICT_GROUP_RESUMED';
+
+function transitionAuditAction(transition: PauseStateTransition): TelegramGroupAuditAction {
+  return transition.kind === 'PAUSE' ? PAUSE_AUDIT_ACTION : RESUME_AUDIT_ACTION;
+}
+
+/**
+ * Builds the column patch for one transition. Pausing records the lifetime counter as the start of
+ * the new episode; resuming leaves the counter alone, because it is a cumulative lifetime figure
+ * that a resume must never reset.
+ */
+function buildPauseStateColumnPatch(
+  row: DistrictTelegramGroup,
+  transition: PauseStateTransition,
+  now: Date,
+) {
+  if (transition.kind === 'PAUSE') {
+    return {
+      isPaused: true,
+      isPausedEpisodeStartSkippedCount: row.isPausedSkippedCount,
+      updatedAt: now,
+    };
+  }
+  return { isPaused: false, updatedAt: now };
+}
+
+/**
+ * Builds the audit metadata for one transition. The skipped count of the episode that just ended is
+ * carried on resume only, as the difference between the lifetime counter and the value captured
+ * when the episode began, so a second cycle reports its own episode rather than the lifetime total.
+ */
+function buildTransitionAuditMetadata(
+  row: DistrictTelegramGroup,
+  transition: PauseStateTransition,
+): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    districtId: row.districtId,
+    groupId: row.id,
+    mahallaName: row.mahallaName,
+    previousIsPaused: row.isPaused,
+    newIsPaused: transition.kind === 'PAUSE',
+  };
+  if (transition.kind === 'RESUME') {
+    metadata.skippedMessageCount = row.isPausedSkippedCount - row.isPausedEpisodeStartSkippedCount;
+  }
+  return metadata;
+}
+
+/**
+ * Applies one pause-state transition to an explicit list of group identifiers within a single
+ * District, all-or-nothing.
+ *
+ * The whole request is resolved before anything is written: every identifier must resolve to a
+ * group row owned by the target District, so a stale identifier or a cross-Tuman identifier
+ * fails the request as a whole and no state changes for the valid identifiers either. The rows
+ * are then locked for the duration of the transaction, so two concurrent bulk requests cannot
+ * interleave their reads and writes.
+ *
+ * The transition is idempotent by construction: a group already in the target state is returned
+ * unchanged, its cumulative skipped counter untouched, and no audit record is written, because a
+ * repeat that changed nothing must not overstate the trail as a transition.
+ */
+async function applyGroupPauseStateTransition(
+  db: DbClient,
+  districtId: string,
+  groupIds: string[],
+  transition: PauseStateTransition,
+  actor?: Actor,
+  clientInfo?: ClientInfo,
+): Promise<BulkPauseStateResult> {
+  const [district] = await db
+    .select({ id: districts.id })
+    .from(districts)
+    .where(eq(districts.id, districtId))
+    .limit(1);
+
+  if (!district) {
+    throw new DistrictNotFoundError(districtId);
+  }
+
+  // De-duplicate so a client that repeats an identifier neither double-writes an audit record
+  // nor inflates the response beyond the set of groups the request actually named.
+  const requestedGroupIds = Array.from(new Set(groupIds));
+  const now = new Date();
+  const results = new Map<string, DistrictTelegramGroup>();
+
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(districtTelegramGroups)
+      .where(
+        and(
+          eq(districtTelegramGroups.districtId, districtId),
+          inArray(districtTelegramGroups.id, requestedGroupIds),
+        ),
+      )
+      .for('update');
+
+    // A cross-Tuman identifier and an unknown identifier are deliberately indistinguishable here:
+    // both are simply absent from the District-scoped result set, and both fail the whole request.
+    if (rows.length !== requestedGroupIds.length) {
+      const foundIds = new Set(rows.map((row) => row.id));
+      const missingId = requestedGroupIds.find((id) => !foundIds.has(id));
+      throw new TelegramGroupNotFoundError(missingId ?? 'unknown');
+    }
+
+    for (const row of rows) {
+      if (row.isPaused === (transition.kind === 'PAUSE')) {
+        results.set(row.id, row);
+        continue;
+      }
+
+      const [updated] = await tx
+        .update(districtTelegramGroups)
+        .set(buildPauseStateColumnPatch(row, transition, now))
+        .where(eq(districtTelegramGroups.id, row.id))
+        .returning();
+
+      if (!updated) {
+        throw new TelegramGroupNotFoundError(row.id);
+      }
+
+      results.set(row.id, updated);
+
+      await recordAuditEvent(tx, {
+        districtId,
+        actorId: actor?.id || null,
+        actorRole: actor?.role || null,
+        action: transitionAuditAction(transition),
+        metadata: buildTransitionAuditMetadata(row, transition),
+        ipAddress: clientInfo?.ipAddress || null,
+        userAgent: clientInfo?.userAgent || null,
+      });
+    }
+  });
+
+  // Preserve request order in the response, resolved back to the de-duplicated identifier list.
+  const orderedRows = requestedGroupIds.map((id) => {
+    const row = results.get(id);
+    if (!row) {
+      throw new TelegramGroupNotFoundError(id);
+    }
+    return row;
+  });
+
+  return { groups: orderedRows.map(formatTelegramGroup) };
+}
+
+export async function pauseDistrictTelegramGroups(
+  db: DbClient,
+  districtId: string,
+  groupIds: string[],
+  actor?: Actor,
+  clientInfo?: ClientInfo,
+): Promise<BulkPauseStateResult> {
+  return applyGroupPauseStateTransition(db, districtId, groupIds, PAUSE_TRANSITION, actor, clientInfo);
+}
+
+export async function resumeDistrictTelegramGroups(
+  db: DbClient,
+  districtId: string,
+  groupIds: string[],
+  actor?: Actor,
+  clientInfo?: ClientInfo,
+): Promise<BulkPauseStateResult> {
+  return applyGroupPauseStateTransition(db, districtId, groupIds, RESUME_TRANSITION, actor, clientInfo);
 }
 
 export async function deleteDistrictTelegramGroup(

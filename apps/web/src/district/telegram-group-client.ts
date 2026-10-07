@@ -16,6 +16,8 @@ import {
   SimulateTestMessageRequest,
   SimulateTestMessageResponse,
   SimulateTestMessageResponseSchema,
+  BulkTelegramGroupPauseStateResponse,
+  BulkTelegramGroupPauseStateResponseSchema,
 } from '@mahalla-ovozi/api-contracts';
 import { request } from '../lib/api-client.js';
 
@@ -101,6 +103,39 @@ export const telegramGroupClient = {
         body: JSON.stringify(payload),
       },
       SimulateTestMessageResponseSchema,
+    );
+  },
+
+  /**
+   * Bulk pause. The identifier list is always explicit: select-all is resolved in the browser
+   * into the concrete ids the operator saw, so the request can never widen server-side.
+   */
+  pauseGroups(
+    districtId: string,
+    groupIds: string[],
+  ): Promise<BulkTelegramGroupPauseStateResponse> {
+    return request<BulkTelegramGroupPauseStateResponse>(
+      `/api/v1/districts/${encodeURIComponent(districtId)}/groups/pause`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ groupIds }),
+      },
+      BulkTelegramGroupPauseStateResponseSchema,
+    );
+  },
+
+  /** Bulk resume. Symmetric to `pauseGroups`; resuming is not a destructive act. */
+  resumeGroups(
+    districtId: string,
+    groupIds: string[],
+  ): Promise<BulkTelegramGroupPauseStateResponse> {
+    return request<BulkTelegramGroupPauseStateResponse>(
+      `/api/v1/districts/${encodeURIComponent(districtId)}/groups/resume`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ groupIds }),
+      },
+      BulkTelegramGroupPauseStateResponseSchema,
     );
   },
 };

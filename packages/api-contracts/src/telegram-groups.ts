@@ -18,6 +18,18 @@ export const TelegramGroupMappingSchema = z.object({
   transport: GroupTransportSchema.default('BOT_API'),
   botMembershipStatus: z.string().nullable(),
   privacyModeDisabled: z.boolean(),
+  /**
+   * Operator decision to stop reading the group at the intake front door while leaving
+   * the mapping and the Telegram membership untouched. Orthogonal to `status` and `transport`.
+   * Always present, including for groups that have never been paused, so a client cannot
+   * mistake an absent field for a different state (spec decision 20).
+   */
+  isPaused: z.boolean(),
+  /**
+   * Cumulative lifetime count of messages discarded while the group was paused. Never reset
+   * by a resume, so a group paused by mistake stays visibly wrong across pause cycles.
+   */
+  isPausedSkippedCount: z.number().int().nonnegative(),
   testMessageReceivedAt: z.string().datetime().nullable(),
   lastValidatedAt: z.string().datetime().nullable(),
   lastError: z.string().nullable(),
@@ -136,3 +148,38 @@ export const SimulateTestMessageResponseSchema = z.object({
   reason: z.string().optional(),
 });
 export type SimulateTestMessageResponse = z.infer<typeof SimulateTestMessageResponseSchema>;
+
+/**
+ * Practical upper bound on one bulk pause/resume request. Select-all is resolved client-side
+ * into an explicit identifier list, so this bound is the guard rail that keeps a crafted or
+ * buggy selection from becoming an unbounded write. It is deliberately generous: a District
+ * maps tens of Mahalla groups, not thousands.
+ */
+export const TELEGRAM_GROUP_BULK_MAX_IDS = 200;
+
+/**
+ * Bulk pause/resume request. The list is always explicit — there is no server-side
+ * "all groups in this Tuman" mode, so nothing the operator never saw can be affected.
+ */
+export const BulkTelegramGroupPauseStateRequestSchema = z.object({
+  groupIds: z
+    .array(z.string().min(1, 'Гуруҳ идентификатори бўш бўлмаслиги керак.'), {
+      required_error: 'Гуруҳлар рўйхати киритилиши шарт.',
+      invalid_type_error: 'Гуруҳлар рўйхати массив бўлиши керак.',
+    })
+    .min(1, 'Камида битта гуруҳ танланиши керак.')
+    .max(
+      TELEGRAM_GROUP_BULK_MAX_IDS,
+      `Бир сўровда энг кўпи билан ${TELEGRAM_GROUP_BULK_MAX_IDS} та гуруҳни танлаш мумкин.`,
+    ),
+});
+export type BulkTelegramGroupPauseStateRequest = z.infer<
+  typeof BulkTelegramGroupPauseStateRequestSchema
+>;
+
+export const BulkTelegramGroupPauseStateResponseSchema = z.object({
+  groups: z.array(TelegramGroupMappingSchema),
+});
+export type BulkTelegramGroupPauseStateResponse = z.infer<
+  typeof BulkTelegramGroupPauseStateResponseSchema
+>;

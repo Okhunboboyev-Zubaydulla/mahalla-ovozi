@@ -3,6 +3,7 @@ import {
   CreateTelegramGroupRequestSchema,
   UpdateTelegramGroupRequestSchema,
   SimulateTestMessageRequestSchema,
+  BulkTelegramGroupPauseStateRequestSchema,
 } from '@mahalla-ovozi/api-contracts';
 import { DbClient } from '../../adapters/db/client.js';
 import { verifyStateChangingOrigin } from '../auth/origin-guard.js';
@@ -14,12 +15,15 @@ import {
   createDistrictTelegramGroup,
   updateDistrictTelegramGroup,
   deleteDistrictTelegramGroup,
+  pauseDistrictTelegramGroups,
+  resumeDistrictTelegramGroups,
   TelegramGroupNotFoundError,
   MahallaNameAlreadyExistsError,
   GroupAlreadyMappedError,
   GroupAlreadyAssignedError,
   BotNotConnectedError,
   UserbotSessionNotActiveError,
+  type BulkPauseStateResult,
 } from './telegram-groups-service.js';
 import {
   startGroupTestSession,
@@ -345,7 +349,68 @@ export function registerTelegramGroupRoutes(fastify: FastifyInstance, db: DbClie
         }
       },
     );
+
+    // 9. POST /api/v1/districts/:districtId/groups/pause
+    // Single-group pausing is expressed as a list of one; there is no separate single-group
+    // endpoint and no server-side all-groups mode, so the request always names its targets.
+    // Pause and resume differ only in the service call, so they share one handler.
+    scope.post(
+      '/api/v1/districts/:districtId/groups/pause',
+      createBulkPauseStateHandler(db, pauseDistrictTelegramGroups),
+    );
+
+    // 10. POST /api/v1/districts/:districtId/groups/resume
+    scope.post(
+      '/api/v1/districts/:districtId/groups/resume',
+      createBulkPauseStateHandler(db, resumeDistrictTelegramGroups),
+    );
   });
+}
+
+type BulkPauseStateServiceCall = (
+  db: DbClient,
+  districtId: string,
+  groupIds: string[],
+  actor?: FastifyRequest['actor'],
+  clientInfo?: ReturnType<typeof getClientInfo>,
+) => Promise<BulkPauseStateResult>;
+
+/**
+ * Builds the handler shared by the bulk pause and bulk resume routes.
+ *
+ * The two directions have an identical request contract — a District and an explicit list of
+ * group identifiers — and differ only in which service transition they invoke, so the
+ * validation, error mapping and response shape live here once rather than twice.
+ */
+function createBulkPauseStateHandler(db: DbClient, applyTransition: BulkPauseStateServiceCall) {
+  return async (
+    req: FastifyRequest<{ Params: { districtId: string }; Body: unknown }>,
+    reply: FastifyReply,
+  ) => {
+    const { districtId } = req.params;
+    const parseResult = BulkTelegramGroupPauseStateRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: parseResult.error.errors[0]?.message || 'Маълумотлар нотўғри киритилди.',
+        },
+      });
+    }
+
+    try {
+      const result = await applyTransition(
+        db,
+        districtId,
+        parseResult.data.groupIds,
+        req.actor,
+        getClientInfo(req),
+      );
+      return reply.status(200).send(result);
+    } catch (err: unknown) {
+      return handleGroupRouteError(err, reply);
+    }
+  };
 }
 
 function handleGroupRouteError(err: unknown, reply: FastifyReply) {

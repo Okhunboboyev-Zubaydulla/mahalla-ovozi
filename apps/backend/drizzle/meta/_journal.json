@@ -232,6 +232,20 @@
       "when": 1791130000000,
       "tag": "0032_wakeful_overlord",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791302269279,
+      "tag": "0033_telegram_group_ingestion_pause",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791304324098,
+      "tag": "0034_telegram_group_pause_episode_start",
+      "breakpoints": true
     }
   ]
 }

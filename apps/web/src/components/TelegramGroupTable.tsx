@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, type Key } from 'react';
 import {
   Table,
   Card,
@@ -12,6 +12,11 @@ import {
   Grid,
   Divider,
   Tooltip,
+  Checkbox,
+  Alert,
+  Select,
+  App as AntdApp,
+  type CheckboxProps,
 } from 'antd';
 import {
   SearchOutlined,
@@ -24,10 +29,13 @@ import {
   CloseCircleOutlined,
   TeamOutlined,
   SafetyOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
 } from '@ant-design/icons';
 import { TelegramGroupMapping } from '@mahalla-ovozi/api-contracts';
 import { TelegramGroupDrawer } from './TelegramGroupDrawer.js';
 import { useTelegramGroups } from '../district/useTelegramGroups.js';
+import { useOptionalAuth } from '../auth/auth-context.js';
 import { themeColors } from '../theme/antd-theme.js';
 
 const { Text, Paragraph } = Typography;
@@ -38,28 +46,94 @@ interface TelegramGroupTableProps {
   isOffline?: boolean;
 }
 
+/** The paused-state filter over the group list (spec story 33). */
+type PausedStateFilter = 'ALL' | 'PAUSED' | 'ACTIVE';
+
+const PAUSED_FILTER_OPTIONS: Array<{ value: PausedStateFilter; label: string }> = [
+  { value: 'ALL', label: 'Барча гуруҳлар' },
+  { value: 'PAUSED', label: 'Фақат тўхтатилганлар' },
+  { value: 'ACTIVE', label: 'Фақат фаоллар' },
+];
+
+/** Renders the paused badge text. A zero counter states the fact without manufacturing alarm. */
+export function pausedBadgeLabel(skippedCount: number): string {
+  return skippedCount > 0
+    ? `Тўхтатилган — ${skippedCount} та хабар ўтказиб юборилди`
+    : 'Тўхтатилган — ҳали хабар ўтказиб юборилмади';
+}
+
+/**
+ * Renders the paused indicator for a group.
+ *
+ * The badge reports the skipped count that the Product Owner operates on, so it is gated to the
+ * Product Owner alongside the pause/resume controls. Spec line 534 leaves the District Hokim's
+ * visibility explicitly unsettled; until that is decided the safest default is to hide it, because
+ * showing it would expose an operator decision as part of the reader's view.
+ */
+function renderPausedBadge(record: TelegramGroupMapping, canSeePausedState: boolean) {
+  if (!record.isPaused || !canSeePausedState) return null;
+  return (
+    <Tag
+      color="warning"
+      icon={<PauseCircleOutlined aria-hidden="true" />}
+      data-testid={`paused-badge-${record.id}`}
+      style={{ whiteSpace: 'normal', margin: 0 }}
+    >
+      {pausedBadgeLabel(record.isPausedSkippedCount)}
+    </Tag>
+  );
+}
+
 export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: TelegramGroupTableProps) {
   const isOffline = isOfflineProp ?? false;
   const screens = useBreakpoint();
   const isDesktop = screens.md ?? true;
 
-  const { groups, isLoading, error, deleteGroup, isDeleting, refetch } = useTelegramGroups(districtId);
+  const auth = useOptionalAuth();
+  const actorRole = auth?.actor?.role;
+  // Pause/resume is a Product Owner action. While the session is still resolving the role is
+  // unknown, so the controls stay unavailable rather than flashing in and being denied. The
+  // paused badge is gated the same way: the Hokim's visibility is an open product question
+  // (spec line 534) and hiding it is the safe default until that is settled.
+  const canPauseGroups = actorRole === 'PRODUCT_OWNER';
+  const canSeePausedState = canPauseGroups;
+
+  const { message } = AntdApp.useApp();
+
+  const {
+    groups,
+    isLoading,
+    error,
+    deleteGroup,
+    isDeleting,
+    refetch,
+    pauseGroups,
+    isPausing,
+    resumeGroups,
+    isResuming,
+  } = useTelegramGroups(districtId);
 
   const [searchText, setSearchText] = useState('');
+  const [pausedFilter, setPausedFilter] = useState<PausedStateFilter>('ALL');
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<TelegramGroupMapping | null>(null);
   const [groupToDelete, setGroupToDelete] = useState<TelegramGroupMapping | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
+  const [pauseConfirmTargets, setPauseConfirmTargets] = useState<string[] | null>(null);
 
   const filteredGroups = useMemo(() => {
-    if (!searchText.trim()) return groups;
     const lower = searchText.toLowerCase();
-    return groups.filter(
-      (g) =>
+    return groups.filter((g) => {
+      if (pausedFilter === 'PAUSED' && !g.isPaused) return false;
+      if (pausedFilter === 'ACTIVE' && g.isPaused) return false;
+      if (!searchText.trim()) return true;
+      return (
         g.mahallaName.toLowerCase().includes(lower) ||
         g.telegramChatTitle.toLowerCase().includes(lower) ||
-        g.telegramChatId.includes(lower),
-    );
-  }, [groups, searchText]);
+        g.telegramChatId.includes(lower)
+      );
+    });
+  }, [groups, searchText, pausedFilter]);
 
   const handleOpenAddDrawer = () => {
     setSelectedGroup(null);
@@ -70,6 +144,88 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
     setSelectedGroup(group);
     setIsDrawerOpen(true);
   };
+
+  // The selection is an intersection with the visible rows, so a row hidden by the search
+  // filter can never be carried into a bulk request the operator did not see.
+  const selectedGroups = useMemo(
+    () => filteredGroups.filter((group) => selectedRowKeys.includes(group.id)),
+    [filteredGroups, selectedRowKeys],
+  );
+  const selectedVisibleIds = useMemo(
+    () => selectedGroups.map((group) => group.id),
+    [selectedGroups],
+  );
+  const pausableSelectedIds = useMemo(
+    () => selectedGroups.filter((group) => !group.isPaused).map((group) => group.id),
+    [selectedGroups],
+  );
+  const resumableSelectedIds = useMemo(
+    () => selectedGroups.filter((group) => group.isPaused).map((group) => group.id),
+    [selectedGroups],
+  );
+
+  const handlePauseRequest = () => {
+    if (pausableSelectedIds.length === 0) return;
+    setPauseConfirmTargets(pausableSelectedIds);
+  };
+
+  const handlePauseCancel = () => {
+    setPauseConfirmTargets(null);
+  };
+
+  const handlePauseConfirm = async () => {
+    if (!pauseConfirmTargets || pauseConfirmTargets.length === 0) return;
+    try {
+      await pauseGroups({ groupIds: pauseConfirmTargets });
+      setPauseConfirmTargets(null);
+      setSelectedRowKeys([]);
+    } catch (err: unknown) {
+      // The failure is surfaced to the operator rather than swallowed: a pause the operator
+      // believes succeeded but did not is a hole in the record nobody knows about.
+      message.error(
+        err instanceof Error ? err.message : 'Гуруҳларни тўхтатишда хатолик юз берди.',
+      );
+    }
+  };
+
+  const handleResume = async () => {
+    if (resumableSelectedIds.length === 0) return;
+    try {
+      await resumeGroups({ groupIds: resumableSelectedIds });
+      setSelectedRowKeys([]);
+    } catch (err: unknown) {
+      message.error(
+        err instanceof Error ? err.message : 'Гуруҳларни давом эттиришда хатолик юз берди.',
+      );
+    }
+  };
+
+  // Every row currently shown is selectable, and the only selection that can be acted on is the
+  // intersection of the raw keys with the filtered rows, so a row hidden by the search box is
+  // never carried into a request. The built-in header checkbox is retired because the explicit
+  // control below states the filtered-view scope the operator is actually getting.
+  const allVisibleSelected =
+    filteredGroups.length > 0 && selectedVisibleIds.length === filteredGroups.length;
+
+  const handleToggleSelectAllVisible = (checked: boolean) => {
+    setSelectedRowKeys(checked ? filteredGroups.map((group) => group.id) : []);
+  };
+
+  const rowSelection = canPauseGroups
+    ? {
+        selectedRowKeys,
+        hideSelectAll: true,
+        onChange: (keys: Key[]) => {
+          setSelectedRowKeys(keys.filter((key) => filteredGroups.some((g) => g.id === key)));
+        },
+        // Names each row checkbox after the Mahalla it selects, so the control is addressable
+        // by the operator's vocabulary rather than by column position. antd's `CheckboxProps`
+        // does not model ARIA attributes even though rc-checkbox forwards them to the real
+        // input, so the assertion covers that library typing gap and nothing else.
+        getCheckboxProps: (record: TelegramGroupMapping) =>
+          ({ 'aria-label': `${record.mahallaName} гуруҳини танлаш` }) as unknown as Partial<CheckboxProps>,
+      }
+    : undefined;
 
   const handleDeleteConfirm = async () => {
     if (!groupToDelete) return;
@@ -201,8 +357,13 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
       title: 'Ҳолати',
       dataIndex: 'status',
       key: 'status',
-      width: '14%',
-      render: (status: TelegramGroupMapping['status']) => renderStatusTag(status),
+      width: '20%',
+      render: (status: TelegramGroupMapping['status'], record: TelegramGroupMapping) => (
+        <Space direction="vertical" size={4} style={{ alignItems: 'flex-start' }}>
+          {renderStatusTag(status)}
+          {renderPausedBadge(record, canSeePausedState)}
+        </Space>
+      ),
     },
     {
       title: 'Амаллар',
@@ -279,12 +440,67 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
             size="middle"
             style={{ maxWidth: '360px', width: '100%' }}
           />
+          <Select<PausedStateFilter>
+            value={pausedFilter}
+            onChange={setPausedFilter}
+            options={PAUSED_FILTER_OPTIONS}
+            data-testid="paused-state-filter"
+            size="middle"
+            style={{ minWidth: '220px' }}
+          />
           {filteredGroups.length > 0 && (
             <Text type="secondary" style={{ fontSize: '13px' }}>
               Жами: <Text strong>{filteredGroups.length}</Text> та гуруҳ
             </Text>
           )}
         </div>
+
+        {canPauseGroups && filteredGroups.length > 0 && (
+          <Alert
+            type="info"
+            showIcon
+            data-testid="bulk-pause-toolbar"
+            message={
+              <Space wrap size="middle" align="center">
+                <Checkbox
+                  checked={allVisibleSelected}
+                  onChange={(e) => handleToggleSelectAllVisible(e.target.checked)}
+                  data-testid="select-all-visible"
+                >
+                  Кўринаётган барча гуруҳларни танлаш
+                </Checkbox>
+                {selectedVisibleIds.length > 0 && (
+                  <Text strong>{`${selectedVisibleIds.length} та гуруҳ танланди`}</Text>
+                )}
+                <Button
+                  type="primary"
+                  icon={<PauseCircleOutlined />}
+                  onClick={handlePauseRequest}
+                  disabled={isOffline || isPausing || isResuming || pausableSelectedIds.length === 0}
+                  style={{ minHeight: '44px' }}
+                >
+                  Танланганларни тўхтатиш
+                </Button>
+                <Button
+                  type="default"
+                  icon={<PlayCircleOutlined />}
+                  onClick={handleResume}
+                  disabled={isOffline || isPausing || isResuming || resumableSelectedIds.length === 0}
+                  style={{ minHeight: '44px' }}
+                >
+                  Танланганларни давом эттириш
+                </Button>
+                <Button
+                  type="link"
+                  onClick={() => setSelectedRowKeys([])}
+                  disabled={isPausing || isResuming}
+                >
+                  Танловни бекор қилиш
+                </Button>
+              </Space>
+            }
+          />
+        )}
 
         {isLoading ? (
           <div style={{ textAlign: 'center', padding: '32px 0' }}>
@@ -296,8 +512,8 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
         ) : filteredGroups.length === 0 ? (
           <Empty
             description={
-              searchText ? (
-                'Қидирув бўйича ҳеч қандай маҳалла топилмади.'
+              searchText || pausedFilter !== 'ALL' ? (
+                'Қидирув ёки филтр бўйича ҳеч қандай маҳалла топилмади.'
               ) : (
                 <Space direction="vertical" align="center">
                   <Text strong>Ҳали биронта маҳалла гуруҳи бириктирилмаган</Text>
@@ -314,6 +530,7 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
             dataSource={filteredGroups}
             columns={desktopColumns}
             rowKey="id"
+            rowSelection={rowSelection}
             size="middle"
             pagination={{
               pageSize: 10,
@@ -330,9 +547,24 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
               <Card key={group.id} size="small" style={{ borderRadius: '8px' }}>
                 <Space direction="vertical" style={{ width: '100%' }} size="small">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text strong style={{ fontSize: '16px' }}>
-                      {group.mahallaName}
-                    </Text>
+                    <Space align="center">
+                      {canPauseGroups && (
+                        <Checkbox
+                          checked={selectedRowKeys.includes(group.id)}
+                          onChange={(e) => {
+                            setSelectedRowKeys((prev) =>
+                              e.target.checked
+                                ? [...prev, group.id]
+                                : prev.filter((key) => key !== group.id),
+                            );
+                          }}
+                          aria-label={`${group.mahallaName} гуруҳини танлаш`}
+                        />
+                      )}
+                      <Text strong style={{ fontSize: '16px' }}>
+                        {group.mahallaName}
+                      </Text>
+                    </Space>
                     <Space>
                       <Tag color={group.transport === 'USERBOT' ? 'purple' : 'blue'}>
                         {group.transport ?? 'BOT_API'}
@@ -340,6 +572,7 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
                       {renderStatusTag(group.status)}
                     </Space>
                   </div>
+                  {renderPausedBadge(group, canSeePausedState)}
                   <div>
                     <Text type="secondary">Гуруҳ: </Text>
                     <Text>{group.telegramChatTitle}</Text>
@@ -392,6 +625,51 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
         }}
         initialGroup={selectedGroup}
       />
+
+      {/* Bulk Pause Confirmation Modal */}
+      <Modal
+        title="Гуруҳларни тўхтатишни тасдиқланг"
+        open={pauseConfirmTargets !== null}
+        onCancel={handlePauseCancel}
+        footer={[
+          <Button
+            key="cancel"
+            data-testid="pause-confirm-cancel"
+            onClick={handlePauseCancel}
+            size="large"
+            style={{ minHeight: '44px' }}
+          >
+            Бекор қилиш
+          </Button>,
+          <Button
+            key="pause"
+            type="primary"
+            data-testid="pause-confirm-submit"
+            loading={isPausing}
+            onClick={handlePauseConfirm}
+            size="large"
+            style={{ minHeight: '44px' }}
+          >
+            Тўхтатишни тасдиқлаш
+          </Button>,
+        ]}
+      >
+        <Space direction="vertical" style={{ width: '100%', marginTop: '12px' }}>
+          <Paragraph strong data-testid="pause-confirm-count">
+            {`${pauseConfirmTargets?.length ?? 0} та гуруҳ тўхтатилади.`}
+          </Paragraph>
+          <Alert
+            type="warning"
+            showIcon
+            message="Тўхтатилган гуруҳлардан келадиган хабарлар йўқ қилинади"
+            description="Гуруҳлар қайта давом эттирилмагунча улардан келган хабарлар тизимга сақланмайди ва қайта ишланмайди."
+          />
+          <Paragraph type="secondary">
+            Бу амал гуруҳни ўчирмайди: Telegram билан алоқа ва маҳалла бириктирилиши сақланиб
+            қолади. Қарор қайтариладиган — кейинроқ гуруҳни давом эттириш кифоя.
+          </Paragraph>
+        </Space>
+      </Modal>
 
       {/* Delete Group Confirmation Modal */}
       <Modal

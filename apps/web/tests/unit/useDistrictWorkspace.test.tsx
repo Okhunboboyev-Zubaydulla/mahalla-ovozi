@@ -73,6 +73,8 @@ const mockGroups: TelegramGroupMapping[] = [
     botMembershipStatus: 'MEMBER',
     privacyModeDisabled: true,
     transport: 'BOT_API',
+    isPaused: false,
+    isPausedSkippedCount: 0,
     testMessageReceivedAt: '2026-08-18T10:00:00.000Z',
     lastValidatedAt: '2026-08-18T10:00:00.000Z',
     lastError: null,

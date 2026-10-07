@@ -684,12 +684,27 @@ export class UserbotConnectionManager {
               result.envelope,
             );
 
-            if (
+            const persisted =
               ingestResult.status === 'ACCEPTED' ||
               ingestResult.status === 'UPDATED' ||
-              ingestResult.status === 'DUPLICATE'
-            ) {
-              recoveredThisPass = true;
+              ingestResult.status === 'DUPLICATE';
+
+            // A paused drop is a deliberate application-side decision on a message that will
+            // never be acted on, and update_position is stored per District session rather than
+            // per chat. Withholding the advance for it would stall the whole session: a Tuman
+            // whose every group is paused would freeze its cursor and replay the paused backlog
+            // on reconnect, and a later accepted sibling message would silently skip past the
+            // paused group. So the advance is shared by the persisted outcomes and the PAUSED
+            // drop, and by nothing else. An ordinary unauthorized update is untouched and does
+            // not move the cursor, exactly as before.
+            const pausedDrop =
+              ingestResult.status === 'DROPPED' && ingestResult.reason === 'GROUP_PAUSED';
+
+            if (persisted || pausedDrop) {
+              if (persisted) {
+                recoveredThisPass = true;
+              }
+
               try {
                 // The position persisted is the one captured when this update arrived, never the
                 // client's live position at this later point: the live value can already cover
@@ -704,7 +719,9 @@ export class UserbotConnectionManager {
                   'Failed to advance userbot update position after message persistence',
                 );
               }
+            }
 
+            if (persisted) {
               // This is the first point in the pass where the ingest is PROVEN successful, so an
               // unrecoverable gap recorded earlier is no longer the current truth: the stream is
               // demonstrably delivering and persisting updates again. Resolving the operational-issue

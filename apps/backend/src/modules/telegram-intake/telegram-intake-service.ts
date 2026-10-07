@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type pg from 'pg';
 import type PgBoss from 'pg-boss';
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, isNull, sql } from 'drizzle-orm';
 import type { DbClient } from '../../adapters/db/client.js';
 import { createDbClient } from '../../adapters/db/client.js';
 import {
@@ -38,7 +38,8 @@ export type AuthorizationFailureReason =
   | 'GROUP_NOT_APPROVED'
   | 'CROSS_DISTRICT_MISMATCH'
   | 'TRANSPORT_MISMATCH'
-  | 'USERBOT_SESSION_NOT_ACTIVE';
+  | 'USERBOT_SESSION_NOT_ACTIVE'
+  | 'GROUP_PAUSED';
 
 export type AuthorizationResult =
   | {
@@ -52,6 +53,11 @@ export type AuthorizationResult =
   | {
       authorized: false;
       reason: AuthorizationFailureReason;
+      /**
+       * Set only for the deliberate operator decision (GROUP_PAUSED), which distinguishes it
+       * from an authorization failure. Both are acknowledged identically to Telegram.
+       */
+      paused?: true;
     };
 
 export type ProcessWebhookResult =
@@ -112,11 +118,83 @@ export type TransportAuthorizationTarget =
  *    - If group.status !== 'VALID' -> GROUP_NOT_APPROVED.
  * 6. Transport mutual exclusivity:
  *    - If group.transport !== target.transport -> TRANSPORT_MISMATCH.
+ * 7. Pause gate (both transports):
+ *    - If group.isPaused -> GROUP_PAUSED, and the group's skipped-message counter is
+ *      incremented by one. Read from the group row this function already loads, so the
+ *      pause check costs no additional read query on either transport.
  */
 export async function resolveDistrictTransportAuthorization(
   db: DbClient,
   target: TransportAuthorizationTarget,
 ): Promise<AuthorizationResult> {
+  const resolved = await resolveTransportAuthorizationCandidate(db, target);
+
+  if (!resolved.authorized) {
+    return resolved;
+  }
+
+  // The single pause gate for BOTH transports. It sits in the post-branch position, after every
+  // transport-specific check has passed, so the decision is made exactly once and the outcome
+  // shape and the counter movement are identical whichever transport carried the message.
+  if (resolved.groupIsPaused) {
+    await countPausedSkip(db, resolved.groupId, target.chatId);
+    return { authorized: false, reason: 'GROUP_PAUSED', paused: true };
+  }
+
+  return {
+    authorized: true,
+    districtId: resolved.districtId,
+    mahallaName: resolved.mahallaName,
+    botId: resolved.botId,
+    groupId: resolved.groupId,
+    transport: resolved.transport,
+  };
+}
+
+/**
+ * A successful resolution carries the pause flag forward instead of deciding on it, so that the
+ * pause decision is owned by the shared post-branch gate above and not duplicated per transport.
+ */
+type ResolvedAuthorization =
+  | { authorized: false; reason: AuthorizationFailureReason }
+  | {
+      authorized: true;
+      districtId: string;
+      mahallaName: string;
+      botId: string | null;
+      groupId: string;
+      transport: GroupTransport;
+      groupIsPaused: boolean;
+    };
+
+/**
+ * Records one skipped message for a paused group. A failure to count must never become a failure
+ * to pause, and must never turn an acknowledged drop into an error response that would make
+ * Telegram retry delivery, so the error is logged and the drop proceeds.
+ */
+async function countPausedSkip(db: DbClient, groupId: string, chatId: string): Promise<void> {
+  try {
+    await db
+      .update(districtTelegramGroups)
+      .set({
+        isPausedSkippedCount: sql`${districtTelegramGroups.isPausedSkippedCount} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(districtTelegramGroups.id, groupId));
+  } catch (err: unknown) {
+    console.error('[telegram-intake]', {
+      event: 'TELEGRAM_PAUSED_SKIP_COUNTER_FAILED',
+      groupId,
+      chatId,
+      err,
+    });
+  }
+}
+
+async function resolveTransportAuthorizationCandidate(
+  db: DbClient,
+  target: TransportAuthorizationTarget,
+): Promise<ResolvedAuthorization> {
   if (target.transport === 'BOT_API') {
     // Consolidated 1-round-trip relational query (H-1 performance optimization)
     const [record] = await db
@@ -131,6 +209,7 @@ export async function resolveDistrictTransportAuthorization(
         groupDistrictId: districtTelegramGroups.districtId,
         groupStatus: districtTelegramGroups.status,
         groupTransport: districtTelegramGroups.transport,
+        groupIsPaused: districtTelegramGroups.isPaused,
         mahallaName: districtTelegramGroups.mahallaName,
       })
       .from(districtTelegramBots)
@@ -183,6 +262,8 @@ export async function resolveDistrictTransportAuthorization(
       return { authorized: false, reason: 'TRANSPORT_MISMATCH' };
     }
 
+    // The pause flag rides along to the shared post-branch gate rather than being decided here,
+    // so both transports reach the identical paused outcome and counter movement.
     return {
       authorized: true,
       districtId: resolvedDistrictId,
@@ -190,6 +271,7 @@ export async function resolveDistrictTransportAuthorization(
       botId: target.botId,
       groupId: record.groupId,
       transport: 'BOT_API',
+      groupIsPaused: record.groupIsPaused === true,
     };
   }
 
@@ -205,6 +287,7 @@ export async function resolveDistrictTransportAuthorization(
       groupDistrictId: districtTelegramGroups.districtId,
       groupStatus: districtTelegramGroups.status,
       groupTransport: districtTelegramGroups.transport,
+      groupIsPaused: districtTelegramGroups.isPaused,
       mahallaName: districtTelegramGroups.mahallaName,
     })
     .from(districts)
@@ -253,6 +336,8 @@ export async function resolveDistrictTransportAuthorization(
     return { authorized: false, reason: 'TRANSPORT_MISMATCH' };
   }
 
+  // Carried to the shared post-branch gate, exactly as on the BOT_API path. The flag comes from
+  // the group row this query already loads, so the pause check adds no read query here either.
   return {
     authorized: true,
     districtId: record.districtId,
@@ -260,6 +345,7 @@ export async function resolveDistrictTransportAuthorization(
     botId: null,
     groupId: record.groupId,
     transport: 'USERBOT',
+    groupIsPaused: record.groupIsPaused === true,
   };
 }
 

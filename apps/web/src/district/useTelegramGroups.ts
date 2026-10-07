@@ -11,10 +11,41 @@ import {
   StartGroupTestResponse,
   SimulateTestMessageRequest,
   SimulateTestMessageResponse,
+  BulkTelegramGroupPauseStateResponse,
 } from '@mahalla-ovozi/api-contracts';
+
+/**
+ * Merges the groups the server actually reported back into the cached list.
+ *
+ * Only rows present in the response are replaced, so a group whose transition was not
+ * acknowledged keeps its previous state instead of inheriting an optimistic guess.
+ */
+function mergeServerReportedGroups(
+  cached: TelegramGroupMapping[] | undefined,
+  reported: TelegramGroupMapping[],
+): TelegramGroupMapping[] | undefined {
+  if (!cached) return cached;
+  const reportedById = new Map(reported.map((group) => [group.id, group]));
+  return cached.map((group) => reportedById.get(group.id) ?? group);
+}
 
 export function useTelegramGroups(districtId: string | null) {
   const queryClient = useQueryClient();
+
+  /**
+   * Applies one bulk pause-state response to the cached group list. Pause and resume report the
+   * same shape and have the same cache consequence, so both mutations share this one callback.
+   */
+  const mergeBulkPauseStateResponse = (response: BulkTelegramGroupPauseStateResponse) => {
+    if (!districtId) return;
+    queryClient.setQueryData<TelegramGroupMapping[]>(
+      districtQueryKeys.groups(districtId),
+      (cached) => mergeServerReportedGroups(cached, response.groups),
+    );
+    queryClient.invalidateQueries({
+      queryKey: districtQueryKeys.groups(districtId),
+    });
+  };
 
   const query = useQuery<TelegramGroupMapping[]>({
     queryKey: districtQueryKeys.groups(districtId),
@@ -141,6 +172,34 @@ export function useTelegramGroups(districtId: string | null) {
     },
   });
 
+  const pauseMutation = useMutation<
+    BulkTelegramGroupPauseStateResponse,
+    Error,
+    { groupIds: string[] }
+  >({
+    mutationFn: async ({ groupIds }) => {
+      if (!districtId) {
+        throw new Error('Туман танланмаган.');
+      }
+      return telegramGroupClient.pauseGroups(districtId, groupIds);
+    },
+    onSuccess: mergeBulkPauseStateResponse,
+  });
+
+  const resumeMutation = useMutation<
+    BulkTelegramGroupPauseStateResponse,
+    Error,
+    { groupIds: string[] }
+  >({
+    mutationFn: async ({ groupIds }) => {
+      if (!districtId) {
+        throw new Error('Туман танланмаган.');
+      }
+      return telegramGroupClient.resumeGroups(districtId, groupIds);
+    },
+    onSuccess: mergeBulkPauseStateResponse,
+  });
+
   return {
     data: query.data,
     isLoading: query.isLoading,
@@ -165,5 +224,11 @@ export function useTelegramGroups(districtId: string | null) {
     isStartingTest: startTestMutation.isPending,
     simulateMessage: simulateMutation.mutateAsync,
     isSimulating: simulateMutation.isPending,
+    pauseGroups: pauseMutation.mutateAsync,
+    isPausing: pauseMutation.isPending,
+    pauseError: pauseMutation.error,
+    resumeGroups: resumeMutation.mutateAsync,
+    isResuming: resumeMutation.isPending,
+    resumeError: resumeMutation.error,
   };
 }

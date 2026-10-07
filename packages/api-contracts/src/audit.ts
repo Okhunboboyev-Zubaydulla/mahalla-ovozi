@@ -170,6 +170,18 @@ export const USERBOT_SESSION_AUDIT_ACTIONS = [
 export const UserbotSessionAuditActionSchema = z.enum(USERBOT_SESSION_AUDIT_ACTIONS);
 export type UserbotSessionAuditAction = z.infer<typeof UserbotSessionAuditActionSchema>;
 
+/**
+ * Enumerated audit vocabulary for the operator-controlled Telegram group pause toggle.
+ * The two transitions are first-class members so the action string is never invented
+ * at a call site (spec decision 16).
+ */
+export const TELEGRAM_GROUP_AUDIT_ACTIONS = [
+  'DISTRICT_GROUP_PAUSED',
+  'DISTRICT_GROUP_RESUMED',
+] as const;
+export const TelegramGroupAuditActionSchema = z.enum(TELEGRAM_GROUP_AUDIT_ACTIONS);
+export type TelegramGroupAuditAction = z.infer<typeof TelegramGroupAuditActionSchema>;
+
 export const USERBOT_AUDIT_ACTIONS = [
   ...USERBOT_SESSION_AUDIT_ACTIONS,
   'USERBOT_ABNORMAL_SIGNAL',

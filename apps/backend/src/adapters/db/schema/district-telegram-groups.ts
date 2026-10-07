@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, text, boolean, timestamp, uniqueIndex, index, check } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  text,
+  boolean,
+  integer,
+  timestamp,
+  uniqueIndex,
+  index,
+  check,
+} from 'drizzle-orm/pg-core';
 import type { GroupTransport } from '@mahalla-ovozi/api-contracts';
 import { districts } from './districts.js';
 
@@ -18,6 +27,19 @@ export const districtTelegramGroups = pgTable(
     transport: text('transport').$type<GroupTransport>().notNull().default('BOT_API'),
     botMembershipStatus: text('bot_membership_status'),
     privacyModeDisabled: boolean('privacy_mode_disabled').notNull().default(false),
+    // Operator decision: the group stays connected and mapped, but messages arriving from it
+    // are discarded at the intake front door. Orthogonal to `status` (transport health) and
+    // to `transport` (how the group is read).
+    isPaused: boolean('is_paused').notNull().default(false),
+    // Cumulative lifetime count of messages dropped while the group was paused. Never reset
+    // by a resume, so a group paused by mistake stays visibly wrong across pause cycles.
+    isPausedSkippedCount: integer('is_paused_skipped_count').notNull().default(0),
+    // The lifetime counter's value captured at the instant the current pause episode began.
+    // The resume audit reports (isPausedSkippedCount - this value), so the episode figure stays
+    // correct across repeated pause/resume cycles while the lifetime counter itself is never reset.
+    isPausedEpisodeStartSkippedCount: integer('is_paused_episode_start_skipped_count')
+      .notNull()
+      .default(0),
     testMessageReceivedAt: timestamp('test_message_received_at', { withTimezone: true }),
     lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
     lastError: text('last_error'),
