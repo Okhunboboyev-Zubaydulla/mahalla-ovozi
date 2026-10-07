@@ -14,8 +14,8 @@
     "reconcile-restore": "pnpm --filter @mahalla-ovozi/backend reconcile-restore",
     "preview:web": "pnpm --filter @mahalla-ovozi/web preview",
     "tunnel": "cloudflared tunnel --url http://localhost:5173",
-    "vps:status": "ssh airnet-vps \"cd /opt/mahalla-ovozi && docker compose ps\"",
-    "vps:logs": "ssh airnet-vps \"cd /opt/mahalla-ovozi && docker compose logs --tail=100\""
+    "vps:status": "ssh airnet-vps \"cd /opt/mahalla-ovozi && docker compose -f deploy/compose/docker-compose.prod.yml ps\"",
+    "vps:logs": "ssh airnet-vps \"cd /opt/mahalla-ovozi && docker compose -f deploy/compose/docker-compose.prod.yml logs --tail=100\""
   },
   "devDependencies": {
     "typescript": "catalog:"
