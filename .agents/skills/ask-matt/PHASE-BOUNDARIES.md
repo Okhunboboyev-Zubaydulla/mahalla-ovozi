@@ -1,8 +1,5 @@
 # Phase boundaries
 
-> **Single-agent fallback (global invariant).** The steps below name sub-agents. Under the session's Direct Single-Agent Invariant (`~/.dsh/AGENTS.md` section 1) no child sessions may be spawned. Do not skip or refuse the work: perform every sub-agent step **sequentially in this session**, and state the degradation explicitly in your output. Never silently drop a step that this skill assigns to a sub-agent.
-> **Degradation in this skill:** The subagent branch of the boundary tree becomes a separate sequential pass in this session.
-
 A **phase** is a chunk of work inside a session: the grilling, the implementation, the QA. The definition is fuzzy on purpose: a phase ends when you think *"ok, we're done with that"*.
 
 The **phase boundary** is the gap between two phases, and it is the only place this decision belongs. Mid-phase there is no decision to make: continue, or split the work that's left into subagents. Compacting mid-phase makes the agent lose the thread.

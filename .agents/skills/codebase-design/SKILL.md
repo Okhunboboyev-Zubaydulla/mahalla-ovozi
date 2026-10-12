@@ -3,10 +3,6 @@ name: codebase-design
 description: Shared vocabulary for designing deep modules. Use when the user wants to design or improve a module's interface, find deepening opportunities, decide where a seam goes, make code more testable or AI-navigable, or when another skill needs the deep-module vocabulary.
 ---
 
-> **Single-agent fallback (global invariant).** The steps below name sub-agents. Under the session's Direct Single-Agent Invariant (`~/.dsh/AGENTS.md` §1) no child sessions may be spawned. Do not skip or refuse the work: perform every sub-agent step **sequentially in this session**, and state the degradation explicitly in your output. Never silently drop a step that this skill assigns to a sub-agent.
-> **Degradation in this skill:** Design-it-twice variants run sequentially in this session rather than in parallel sub-agents.
-
-
 # Codebase Design
 
 Design **deep modules**: a lot of behaviour behind a small interface, placed at a clean seam, testable through that interface. Use this language and these principles wherever code is being designed or restructured. The aim is leverage for callers, locality for maintainers, and testability for everyone.

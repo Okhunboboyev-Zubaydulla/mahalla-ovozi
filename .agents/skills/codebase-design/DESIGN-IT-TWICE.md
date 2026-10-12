@@ -1,8 +1,5 @@
 # Design It Twice
 
-> **Single-agent fallback (global invariant).** The steps below name sub-agents. Under the session's Direct Single-Agent Invariant (`~/.dsh/AGENTS.md` section 1) no child sessions may be spawned. Do not skip or refuse the work: perform every sub-agent step **sequentially in this session**, and state the degradation explicitly in your output. Never silently drop a step that this skill assigns to a sub-agent.
-> **Degradation in this skill:** Produce the 3+ alternative interfaces one after another in this session, deliberately varying the design constraint each time. The independence of separately-seeded contexts is lost, so guard against converging on the first idea.
-
 When the user wants to explore alternative interfaces for a chosen deepening candidate, use this parallel sub-agent pattern. Based on "Design It Twice" (Ousterhout): your first idea is unlikely to be the best.
 
 Uses the vocabulary in [SKILL.md](SKILL.md): **module**, **interface**, **seam**, **adapter**, **leverage**.

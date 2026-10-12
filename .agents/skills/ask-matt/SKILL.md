@@ -4,10 +4,6 @@ description: Ask which skill or flow fits your situation. A router over the skil
 disable-model-invocation: true
 ---
 
-> **Single-agent fallback (global invariant).** The steps below name sub-agents. Under the session's Direct Single-Agent Invariant (`~/.dsh/AGENTS.md` §1) no child sessions may be spawned. Do not skip or refuse the work: perform every sub-agent step **sequentially in this session**, and state the degradation explicitly in your output. Never silently drop a step that this skill assigns to a sub-agent.
-> **Degradation in this skill:** The subagent branch of the boundary tree becomes a separate sequential pass in this session.
-
-
 # Ask Matt
 
 You don't remember every skill, so ask.

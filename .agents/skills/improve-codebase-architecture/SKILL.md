@@ -4,10 +4,6 @@ description: Scan a codebase for deepening opportunities, present them as a visu
 disable-model-invocation: true
 ---
 
-> **Single-agent fallback (global invariant).** The steps below name sub-agents. Under the session's Direct Single-Agent Invariant (`~/.dsh/AGENTS.md` §1) no child sessions may be spawned. Do not skip or refuse the work: perform every sub-agent step **sequentially in this session**, and state the degradation explicitly in your output. Never silently drop a step that this skill assigns to a sub-agent.
-> **Degradation in this skill:** The codebase walk runs as a sequential pass in this session rather than as a spawned sub-agent.
-
-
 # Improve Codebase Architecture
 
 Surface architectural friction and propose **deepening opportunities**: refactors that turn shallow modules into deep ones. The aim is testability and AI-navigability.

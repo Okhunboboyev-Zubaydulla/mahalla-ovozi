@@ -3,10 +3,6 @@ name: code-review
 description: "Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/spec asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
 ---
 
-> **Single-agent fallback (global invariant).** The steps below name sub-agents. Under the session's Direct Single-Agent Invariant (`~/.dsh/AGENTS.md` §1) no child sessions may be spawned. Do not skip or refuse the work: perform every sub-agent step **sequentially in this session**, and state the degradation explicitly in your output. Never silently drop a step that this skill assigns to a sub-agent.
-> **Degradation in this skill:** Both axes run back-to-back in one context, so the standards/spec isolation guarantee is lost - run the standards pass to completion and record its findings before starting the spec pass, and guard against one axis colouring the other.
-
-
 Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
 
 - **Standards**: does the code conform to this repo's documented coding standards?
