@@ -51,27 +51,13 @@ export const MAHALLA_PALETTE: readonly MahallaColorToken[] = [
   { bg: '#F3F4F6', border: '#CFD3DA', text: '#374151', icon: '#0284C7' },
 ] as const;
 
-/**
- * Normalizes a Mahalla name by stripping common suffixes ("маҳалласи", "mahallasi", "мфй", etc.)
- * and unifying apostrophes, so variations of the same name produce identical color hashes.
- */
-export function normalizeMahallaName(name: string): string {
-  const trimmed = name.trim().toLowerCase();
-  if (trimmed.length === 0) {
-    return '';
-  }
+import {
+  canonicalizeMahallaName,
+  normalizeMahallaName,
+} from '@mahalla-ovozi/api-contracts';
 
-  // Standardize apostrophes
-  const unifiedApostrophes = trimmed.replace(/[`'ʻʼ’]/g, "'");
+export { canonicalizeMahallaName, normalizeMahallaName };
 
-  // Remove common administrative suffix variants (supporting both Latin and Cyrillic)
-  const cleaned = unifiedApostrophes
-    .replace(/(?:^|\s+)(маҳалласи|маҳалла|махалласи|махалла|mahallasi|mahalla)(?:\s+|$)/gi, ' ')
-    .replace(/(?:^|\s+)(м\.?ф\.?й\.?|m\.?f\.?y\.?)(?:\s+|$)/gi, ' ')
-    .trim();
-
-  return cleaned.length > 0 ? cleaned : trimmed;
-}
 
 const FALLBACK_MAHALLA_COLOR: MahallaColorToken = MAHALLA_PALETTE[8] ?? {
   bg: '#F8FAFC',

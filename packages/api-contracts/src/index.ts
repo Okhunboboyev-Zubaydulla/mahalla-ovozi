@@ -16,3 +16,4 @@ export * from './signals.js';
 export * from './archived-mahallas.js';
 export * from './timezone.js';
 export * from './userbot-session.js';
+export * from './mahalla.js';

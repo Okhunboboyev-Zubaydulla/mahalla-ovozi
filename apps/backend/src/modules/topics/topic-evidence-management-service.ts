@@ -40,6 +40,7 @@ import {
   type SignalMessageListItemDto,
   type SignalDetailDto,
   type QualifyingLane,
+  canonicalizeMahallaName,
 } from '@mahalla-ovozi/api-contracts';
 
 /**
@@ -1124,12 +1125,13 @@ export async function listSignals(
     const telegramChatId = `manual_chat_${params.districtId}`;
     const telegramMessageId = `manual_msg_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
     const aiOpId = `aiop_${crypto.randomUUID()}`;
+    const canonicalMahalla = canonicalizeMahallaName(params.mahallaName);
 
     await withTransactionalIntake(pool, boss, async ({ tx, enqueueJob }) => {
       await tx.insert(telegramIntakeRecords).values({
         id: intakeId,
         districtId: params.districtId,
-        mahallaName: params.mahallaName,
+        mahallaName: canonicalMahalla,
         source: 'BOT_API',
         telegramBotId: 'manual_bot',
         telegramChatId,
@@ -1158,7 +1160,7 @@ export async function listSignals(
       await tx.insert(aiOperations).values({
         id: aiOpId,
         districtId: params.districtId,
-        mahallaName: params.mahallaName,
+        mahallaName: canonicalMahalla,
         calendarDay,
         operationType: 'SEMANTIC_RELEVANCE',
         targetId: intakeId,
@@ -1177,7 +1179,7 @@ export async function listSignals(
       const topicJobData: TelegramTopicAssignmentJobData = {
         intakeId,
         districtId: params.districtId,
-        mahallaName: params.mahallaName,
+        mahallaName: canonicalMahalla,
         calendarDay,
         telegramChatId,
         telegramMessageId,
@@ -1209,7 +1211,7 @@ export async function listSignals(
         metadata: {
           intakeId,
           districtId: params.districtId,
-          mahallaName: params.mahallaName,
+          mahallaName: canonicalMahalla,
           lanes: params.lanes,
           changeReason: params.changeReason,
         },

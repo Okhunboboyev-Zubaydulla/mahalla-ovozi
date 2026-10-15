@@ -1,7 +1,7 @@
 import React from 'react';
 import { Modal, Form, Input, Select, message } from 'antd';
 import { useQuery } from '@tanstack/react-query';
-import type { QualifyingLane } from '@mahalla-ovozi/api-contracts';
+import { type QualifyingLane, canonicalizeMahallaName } from '@mahalla-ovozi/api-contracts';
 import { districtClient } from '../../district/district-client.js';
 import { useCreateManualSignal } from '../../hooks/useSignalMessages.js';
 
@@ -45,7 +45,7 @@ export const CreateManualSignalModal: React.FC<CreateManualSignalModalProps> = (
     try {
       await createMutation.mutateAsync({
         districtId: values.districtId,
-        mahallaName: values.mahallaName.trim(),
+        mahallaName: canonicalizeMahallaName(values.mahallaName),
         verbatimText: values.verbatimText.trim(),
         lanes: values.lanes,
         changeReason: values.changeReason.trim(),
@@ -97,8 +97,9 @@ export const CreateManualSignalModal: React.FC<CreateManualSignalModalProps> = (
           name="mahallaName"
           label="Маҳалла номи"
           rules={[{ required: true, message: 'Маҳалла номини киритинг' }]}
+          extra="«МФЙ» ёки «маҳалласи» қўшимчалари автоматик тарзда олиб ташланади."
         >
-          <Input placeholder="Масалан: Истиқлол МФЙ" />
+          <Input placeholder="Масалан: Истиқлол" />
         </Form.Item>
 
         <Form.Item

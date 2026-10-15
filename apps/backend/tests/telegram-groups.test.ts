@@ -351,6 +351,66 @@ describe('Telegram Groups Management & Validation Integration Tests', () => {
     expect(res.json().error.code).toBe('MAHALLA_NAME_EXISTS');
   });
 
+  it('rejects registering duplicate Mahalla with administrative suffix like MFY (Milestone 2)', async () => {
+    const chatId1 = `-100${crypto.randomUUID().replace(/\D/g, '').slice(0, 10)}`;
+    const chatId2 = `-100${crypto.randomUUID().replace(/\D/g, '').slice(0, 10)}`;
+
+    await db.insert(districtTelegramGroups).values({
+      id: `dtg_${crypto.randomUUID()}`,
+      districtId: testDistrictId,
+      mahallaName: 'Navbahor',
+      telegramChatId: chatId1,
+      telegramChatTitle: 'Navbahor Chat',
+      status: 'PENDING',
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/getChatMember')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, result: { status: 'member' } }),
+        });
+      }
+      if (urlStr.includes('/getChat')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, result: { id: -100, title: 'Chat 2', type: 'supergroup' } }),
+        });
+      }
+      if (urlStr.includes('/getMe')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, result: { id: 1, can_read_all_group_messages: true } }),
+        });
+      }
+      return Promise.reject(new Error('Unknown'));
+    }) as any;
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/v1/districts/${testDistrictId}/groups`,
+      headers: {
+        ...SAME_ORIGIN_HEADERS,
+        cookie: poCookie,
+        'content-type': 'application/json',
+      },
+      payload: {
+        mahallaName: 'Navbahor MFY',
+        telegramChatId: chatId2,
+      },
+    });
+
+    globalThis.fetch = originalFetch;
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('MAHALLA_NAME_EXISTS');
+  });
+
   it('rejects duplicate Telegram group chat ID within the same district (AC 2)', async () => {
     const sharedChatId = `-100${crypto.randomUUID().replace(/\D/g, '').slice(0, 10)}`;
 

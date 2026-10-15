@@ -16,6 +16,7 @@ import {
   TelegramGroupAuditAction,
   CreateTelegramGroupRequest,
   UpdateTelegramGroupRequest,
+  canonicalizeMahallaName,
 } from '@mahalla-ovozi/api-contracts';
 import { decryptToken } from '../../adapters/crypto/token-cipher.js';
 import {
@@ -218,10 +219,10 @@ export async function createDistrictTelegramGroup(
   }
 
   const trimmedChatId = input.telegramChatId.trim();
-  const trimmedMahalla = input.mahallaName.trim();
+  const canonicalMahalla = canonicalizeMahallaName(input.mahallaName);
   const transport: GroupTransport = input.transport ?? 'BOT_API';
 
-  let chatTitle = trimmedMahalla;
+  let chatTitle = canonicalMahalla;
   let chatUsername: string | null = null;
   let isPrivacyDisabled = false;
   let botMembershipStatus: string | null = null;
@@ -272,19 +273,17 @@ export async function createDistrictTelegramGroup(
 
   try {
     await db.transaction(async (tx) => {
-      const [existingMahalla] = await tx
-        .select({ id: districtTelegramGroups.id })
+      const existingDistrictGroups = await tx
+        .select({ id: districtTelegramGroups.id, mahallaName: districtTelegramGroups.mahallaName })
         .from(districtTelegramGroups)
-        .where(
-          and(
-            eq(districtTelegramGroups.districtId, districtId),
-            sql`LOWER(${districtTelegramGroups.mahallaName}) = LOWER(${trimmedMahalla})`,
-          ),
-        )
-        .limit(1);
+        .where(eq(districtTelegramGroups.districtId, districtId));
+
+      const existingMahalla = existingDistrictGroups.find(
+        (g) => canonicalizeMahallaName(g.mahallaName).toLowerCase() === canonicalMahalla.toLowerCase(),
+      );
 
       if (existingMahalla) {
-        throw new MahallaNameAlreadyExistsError(trimmedMahalla);
+        throw new MahallaNameAlreadyExistsError(canonicalMahalla);
       }
 
       const [existingChat] = await tx
@@ -306,7 +305,7 @@ export async function createDistrictTelegramGroup(
         .values({
           id: groupId,
           districtId,
-          mahallaName: trimmedMahalla,
+          mahallaName: canonicalMahalla,
           telegramChatId: trimmedChatId,
           telegramChatTitle: chatTitle,
           telegramChatUsername: chatUsername,
@@ -330,7 +329,7 @@ export async function createDistrictTelegramGroup(
         metadata: {
           districtId,
           groupId,
-          mahallaName: trimmedMahalla,
+          mahallaName: canonicalMahalla,
           telegramChatId: trimmedChatId,
           telegramChatTitle: chatTitle,
           transport,
@@ -349,8 +348,8 @@ export async function createDistrictTelegramGroup(
     }
 
     mapPostgresConstraintError(err, {
-      district_telegram_groups_district_mahalla_lower_idx: () => new MahallaNameAlreadyExistsError(trimmedMahalla),
-      mahalla_name: () => new MahallaNameAlreadyExistsError(trimmedMahalla),
+      district_telegram_groups_district_mahalla_lower_idx: () => new MahallaNameAlreadyExistsError(canonicalMahalla),
+      mahalla_name: () => new MahallaNameAlreadyExistsError(canonicalMahalla),
       district_telegram_groups_chat_id_idx: () => new GroupAlreadyAssignedError(trimmedChatId),
       telegram_chat_id: () => new GroupAlreadyAssignedError(trimmedChatId),
     });
@@ -388,7 +387,7 @@ export async function updateDistrictTelegramGroup(
     throw new TelegramGroupNotFoundError(groupId);
   }
 
-  const newMahallaName = input.mahallaName ? input.mahallaName.trim() : group.mahallaName;
+  const newMahallaName = input.mahallaName ? canonicalizeMahallaName(input.mahallaName) : group.mahallaName;
   const newChatId = input.telegramChatId ? input.telegramChatId.trim() : group.telegramChatId;
   const newTransport = input.transport !== undefined ? input.transport : group.transport;
   const isChatChanged = newChatId !== group.telegramChatId;
@@ -468,102 +467,120 @@ export async function updateDistrictTelegramGroup(
   const now = new Date();
   let updatedRow: DistrictTelegramGroup | undefined;
 
-  await db.transaction(async (tx) => {
-    if (newMahallaName.toLowerCase() !== group.mahallaName.toLowerCase()) {
-      const [existingMahalla] = await tx
-        .select({ id: districtTelegramGroups.id })
-        .from(districtTelegramGroups)
-        .where(
-          and(
-            eq(districtTelegramGroups.districtId, districtId),
-            sql`LOWER(${districtTelegramGroups.mahallaName}) = LOWER(${newMahallaName})`,
-          ),
-        )
-        .limit(1);
+  try {
+    await db.transaction(async (tx) => {
+      if (newMahallaName.toLowerCase() !== group.mahallaName.toLowerCase()) {
+        const existingDistrictGroups = await tx
+          .select({ id: districtTelegramGroups.id, mahallaName: districtTelegramGroups.mahallaName })
+          .from(districtTelegramGroups)
+          .where(eq(districtTelegramGroups.districtId, districtId));
 
-      if (existingMahalla) {
-        throw new MahallaNameAlreadyExistsError(newMahallaName);
-      }
-    }
+        const existingMahalla = existingDistrictGroups.find(
+          (g) =>
+            g.id !== groupId &&
+            canonicalizeMahallaName(g.mahallaName).toLowerCase() === newMahallaName.toLowerCase(),
+        );
 
-    if (isChatChanged) {
-      const [existingChat] = await tx
-        .select({ id: districtTelegramGroups.id, districtId: districtTelegramGroups.districtId })
-        .from(districtTelegramGroups)
-        .where(eq(districtTelegramGroups.telegramChatId, newChatId))
-        .limit(1);
-
-      if (existingChat && existingChat.id !== groupId) {
-        if (existingChat.districtId === districtId) {
-          throw new GroupAlreadyMappedError(newChatId);
-        } else {
-          throw new GroupAlreadyAssignedError(newChatId);
+        if (existingMahalla) {
+          throw new MahallaNameAlreadyExistsError(newMahallaName);
         }
       }
-    }
 
-    const [updated] = await tx
-      .update(districtTelegramGroups)
-      .set({
-        mahallaName: newMahallaName,
-        telegramChatId: newChatId,
-        telegramChatTitle: chatInfo.chatTitle,
-        telegramChatUsername: chatInfo.chatUsername,
-        transport: newTransport,
-        status: isChatChanged ? 'VALID' : group.status,
-        botMembershipStatus:
-          newTransport === 'USERBOT'
-            ? null
-            : isChatChanged || isTransportChanged
-              ? botMembershipStatus
-              : group.botMembershipStatus,
-        privacyModeDisabled: isPrivacyDisabled,
-        testMessageReceivedAt: isChatChanged ? null : group.testMessageReceivedAt,
-        lastValidatedAt: isChatChanged ? now : group.lastValidatedAt,
-        lastError: null,
-        updatedAt: now,
-      })
-      .where(eq(districtTelegramGroups.id, groupId))
-      .returning();
+      if (isChatChanged) {
+        const [existingChat] = await tx
+          .select({ id: districtTelegramGroups.id, districtId: districtTelegramGroups.districtId })
+          .from(districtTelegramGroups)
+          .where(eq(districtTelegramGroups.telegramChatId, newChatId))
+          .limit(1);
 
-    updatedRow = updated;
+        if (existingChat && existingChat.id !== groupId) {
+          if (existingChat.districtId === districtId) {
+            throw new GroupAlreadyMappedError(newChatId);
+          } else {
+            throw new GroupAlreadyAssignedError(newChatId);
+          }
+        }
+      }
 
-    if (isChatChanged || isMahallaChanged) {
-      await recordAuditEvent(tx, {
-        districtId,
-        actorId: actor?.id || null,
-        actorRole: actor?.role || null,
-        action: 'DISTRICT_GROUP_REMAPPED',
-        metadata: {
-          districtId,
-          groupId,
+      const [updated] = await tx
+        .update(districtTelegramGroups)
+        .set({
           mahallaName: newMahallaName,
           telegramChatId: newChatId,
-          isChatChanged,
-        },
-        ipAddress: clientInfo?.ipAddress || null,
-        userAgent: clientInfo?.userAgent || null,
-      });
+          telegramChatTitle: chatInfo.chatTitle,
+          telegramChatUsername: chatInfo.chatUsername,
+          transport: newTransport,
+          status: isChatChanged ? 'VALID' : group.status,
+          botMembershipStatus:
+            newTransport === 'USERBOT'
+              ? null
+              : isChatChanged || isTransportChanged
+                ? botMembershipStatus
+                : group.botMembershipStatus,
+          privacyModeDisabled: isPrivacyDisabled,
+          testMessageReceivedAt: isChatChanged ? null : group.testMessageReceivedAt,
+          lastValidatedAt: isChatChanged ? now : group.lastValidatedAt,
+          lastError: null,
+          updatedAt: now,
+        })
+        .where(eq(districtTelegramGroups.id, groupId))
+        .returning();
+
+      updatedRow = updated;
+
+      if (isChatChanged || isMahallaChanged) {
+        await recordAuditEvent(tx, {
+          districtId,
+          actorId: actor?.id || null,
+          actorRole: actor?.role || null,
+          action: 'DISTRICT_GROUP_REMAPPED',
+          metadata: {
+            districtId,
+            groupId,
+            mahallaName: newMahallaName,
+            telegramChatId: newChatId,
+            isChatChanged,
+          },
+          ipAddress: clientInfo?.ipAddress || null,
+          userAgent: clientInfo?.userAgent || null,
+        });
+      }
+
+      if (isTransportChanged) {
+        await recordAuditEvent(tx, {
+          districtId,
+          actorId: actor?.id || null,
+          actorRole: actor?.role || null,
+          action: 'GROUP_TRANSPORT_CHANGED',
+          metadata: {
+            districtId,
+            groupId,
+            mahallaName: newMahallaName,
+            previousTransport: group.transport,
+            newTransport,
+          },
+          ipAddress: clientInfo?.ipAddress || null,
+          userAgent: clientInfo?.userAgent || null,
+        });
+      }
+    });
+  } catch (err: unknown) {
+    if (
+      err instanceof MahallaNameAlreadyExistsError ||
+      err instanceof GroupAlreadyMappedError ||
+      err instanceof GroupAlreadyAssignedError
+    ) {
+      throw err;
     }
 
-    if (isTransportChanged) {
-      await recordAuditEvent(tx, {
-        districtId,
-        actorId: actor?.id || null,
-        actorRole: actor?.role || null,
-        action: 'GROUP_TRANSPORT_CHANGED',
-        metadata: {
-          districtId,
-          groupId,
-          mahallaName: newMahallaName,
-          previousTransport: group.transport,
-          newTransport,
-        },
-        ipAddress: clientInfo?.ipAddress || null,
-        userAgent: clientInfo?.userAgent || null,
-      });
-    }
-  });
+    mapPostgresConstraintError(err, {
+      district_telegram_groups_district_mahalla_lower_idx: () => new MahallaNameAlreadyExistsError(newMahallaName),
+      mahalla_name: () => new MahallaNameAlreadyExistsError(newMahallaName),
+      district_telegram_groups_chat_id_idx: () => new GroupAlreadyAssignedError(newChatId),
+      telegram_chat_id: () => new GroupAlreadyAssignedError(newChatId),
+    });
+    throw err;
+  }
 
   if (!updatedRow) {
     throw new TelegramGroupNotFoundError(groupId);

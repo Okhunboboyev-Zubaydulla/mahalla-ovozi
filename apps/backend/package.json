@@ -16,6 +16,7 @@
     "cli:manage-po": "node --env-file-if-exists=.env --import tsx/esm src/cli/manage-product-owner.ts",
     "cli:bootstrap-userbot": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import tsx/esm src/cli/bootstrap-userbot-session.ts",
     "cli:clean-test-data": "node --env-file-if-exists=.env --import tsx/esm src/cli/clean-test-data.ts",
+    "cli:deduplicate-topics": "node --env-file-if-exists=.env --import tsx/esm src/cli/deduplicate-mahalla-topics.ts",
     "cli:purge-messages": "node --env-file-if-exists=.env --import tsx/esm src/cli/purge-messages.ts",
     "purge-messages": "node --env-file-if-exists=.env --import tsx/esm src/cli/purge-messages.ts",
     "cli:view-evidence": "node --env-file-if-exists=.env --import tsx/esm src/cli/view-evidence.ts",
