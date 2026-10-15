@@ -98,7 +98,8 @@ export function classifyAuditActionCategory(action: string): AuditActionCategory
   }
 
   if (
-    action.startsWith('DISTRICT_')
+    action.startsWith('DISTRICT_') ||
+    action.startsWith('ARCHIVED_MAHALLA_')
   ) {
     return 'DISTRICT_ADMINISTRATION';
   }

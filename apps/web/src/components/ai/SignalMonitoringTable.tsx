@@ -38,6 +38,7 @@ import { districtClient } from '../../district/district-client.js';
 import { useDistrictMahallas } from '../../topics/district-topics-client.js';
 import { useSignalMessages, useBatchDeleteSignals } from '../../hooks/useSignalMessages.js';
 import { SignalInspectionDrawer } from './SignalInspectionDrawer.js';
+import { formatTashkentDateTime } from '../../lib/formatters.js';
 import { CreateManualSignalModal } from './CreateManualSignalModal.js';
 
 const { Text, Paragraph } = Typography;
@@ -265,8 +266,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
       width: 140,
       render: (ts: string) => (
         <Text style={{ fontSize: 13, color: token.colorTextSecondary }}>
-          {new Date(ts).toLocaleString('uz-UZ', {
-            timeZone: 'Asia/Tashkent',
+          {formatTashkentDateTime(ts, {
             month: '2-digit',
             day: '2-digit',
             hour: '2-digit',

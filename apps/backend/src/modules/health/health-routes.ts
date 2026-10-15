@@ -55,11 +55,30 @@ async function checkBossLiveness(boss?: PgBoss): Promise<boolean> {
   }
 }
 
-async function checkRestoreReconciliationHealth(
+interface RestoreHealthCacheEntry {
+  status: 'ok' | 'down' | 'unreconciled';
+  expiresAt: number;
+}
+
+let restoreHealthCache: RestoreHealthCacheEntry | null = null;
+
+export function clearRestoreHealthCache(): void {
+  restoreHealthCache = null;
+}
+
+export async function checkRestoreReconciliationHealth(
   db: DbClient,
   tombstoneStore?: ExternalTombstoneStore,
+  cacheTtlMs: number = 5000,
 ): Promise<'ok' | 'down' | 'unreconciled'> {
+  const now = Date.now();
+  if (cacheTtlMs > 0 && restoreHealthCache && restoreHealthCache.expiresAt > now) {
+    return restoreHealthCache.status;
+  }
+
   try {
+    let result: 'ok' | 'down' | 'unreconciled' = 'ok';
+
     // 1. Check if an active disaster_restore_reconciliation_failure issue exists in DB
     const [activeIssue] = await db
       .select({ id: operationalIssues.id })
@@ -73,47 +92,62 @@ async function checkRestoreReconciliationHealth(
       .limit(1);
 
     if (activeIssue) {
-      return 'down';
-    }
+      result = 'down';
+    } else {
+      // 2. Load tombstones from external store
+      const store = tombstoneStore || new FileExternalTombstoneStore();
+      const extTombstones = await store.loadAllTombstones();
 
-    // 2. Load tombstones from external store
-    const store = tombstoneStore || new FileExternalTombstoneStore();
-    const extTombstones = await store.loadAllTombstones();
+      if (extTombstones.length > 0) {
+        const extDistrictIds = extTombstones.map((t) => t.districtId);
 
-    if (extTombstones.length > 0) {
-      const extDistrictIds = extTombstones.map((t) => t.districtId);
+        // Check if any deleted district from external tombstone store exists in districts table (resurrected!)
+        const resurrected = await db
+          .select({ id: districts.id })
+          .from(districts)
+          .where(inArray(districts.id, extDistrictIds))
+          .limit(1);
 
-      // Check if any deleted district from external tombstone store exists in districts table (resurrected!)
-      const resurrected = await db
-        .select({ id: districts.id })
-        .from(districts)
-        .where(inArray(districts.id, extDistrictIds))
-        .limit(1);
+        if (resurrected.length > 0) {
+          result = 'unreconciled';
+        }
+      }
 
-      if (resurrected.length > 0) {
-        return 'unreconciled';
+      if (result === 'ok') {
+        // 3. Check if any tombstone in DB has unreconciled status (PENDING, FAILED, or null)
+        const [unreconciledDbRow] = await db
+          .select({ id: districtDeletionRecords.id })
+          .from(districtDeletionRecords)
+          .where(
+            or(
+              eq(districtDeletionRecords.restoreReconciliationStatus, 'PENDING'),
+              eq(districtDeletionRecords.restoreReconciliationStatus, 'FAILED'),
+              sql`${districtDeletionRecords.restoreReconciliationStatus} IS NULL`,
+            ),
+          )
+          .limit(1);
+
+        if (unreconciledDbRow) {
+          result = 'unreconciled';
+        }
       }
     }
 
-    // 3. Check if any tombstone in DB has unreconciled status (PENDING, FAILED, or null)
-    const [unreconciledDbRow] = await db
-      .select({ id: districtDeletionRecords.id })
-      .from(districtDeletionRecords)
-      .where(
-        or(
-          eq(districtDeletionRecords.restoreReconciliationStatus, 'PENDING'),
-          eq(districtDeletionRecords.restoreReconciliationStatus, 'FAILED'),
-          sql`${districtDeletionRecords.restoreReconciliationStatus} IS NULL`,
-        ),
-      )
-      .limit(1);
-
-    if (unreconciledDbRow) {
-      return 'unreconciled';
+    if (cacheTtlMs > 0) {
+      restoreHealthCache = {
+        status: result,
+        expiresAt: now + cacheTtlMs,
+      };
     }
 
-    return 'ok';
+    return result;
   } catch (err) {
+    if (cacheTtlMs > 0) {
+      restoreHealthCache = {
+        status: 'down',
+        expiresAt: now + cacheTtlMs,
+      };
+    }
     if (err instanceof TombstoneStoreCorruptedError) {
       return 'down';
     }
@@ -177,9 +211,21 @@ export function registerHealthRoutes(
       const isDbOk = dbProbe.isHealthy;
       const isQueueOk = await checkBossLiveness(deps.boss);
 
+      const cacheTtlMs =
+        deps.config?.restoreHealthCacheTtlMs ??
+        (process.env.RESTORE_HEALTH_CACHE_TTL_MS
+          ? parseInt(process.env.RESTORE_HEALTH_CACHE_TTL_MS, 10)
+          : process.env.NODE_ENV === 'test'
+            ? 0
+            : 5000);
+
       let restoreStatus: 'ok' | 'down' | 'unreconciled' = 'ok';
       if (isDbOk) {
-        restoreStatus = await checkRestoreReconciliationHealth(deps.db, deps.tombstoneStore);
+        restoreStatus = await checkRestoreReconciliationHealth(
+          deps.db,
+          deps.tombstoneStore,
+          cacheTtlMs,
+        );
       } else {
         restoreStatus = 'down';
       }

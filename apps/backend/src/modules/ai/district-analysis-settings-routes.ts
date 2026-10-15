@@ -11,6 +11,7 @@ import {
 import { DbClient } from '../../adapters/db/client.js';
 import { districts } from '../../adapters/db/schema/districts.js';
 import { createRequireProductOwner } from '../auth/require-product-owner.js';
+import { verifyStateChangingOrigin } from '../auth/origin-guard.js';
 import { districtAnalysisSettingsService } from './district-analysis-settings-service.js';
 
 interface DistrictSettingsRouteParams {
@@ -48,6 +49,7 @@ export function registerDistrictAnalysisSettingsRoutes(
 ): void {
   // Encapsulated Fastify scope with strict Product Owner authorization guard (AC 1, AC 9)
   server.register(async (scope) => {
+    scope.addHook('preHandler', verifyStateChangingOrigin);
     scope.addHook('preHandler', createRequireProductOwner(db));
 
     /**

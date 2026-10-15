@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import type { DistrictHokimAccount } from '@mahalla-ovozi/api-contracts';
 import { themeColors } from '../theme/antd-theme.js';
+import { formatTashkentDateTime } from '../lib/formatters.js';
 
 const { Title, Text } = Typography;
 
@@ -111,10 +112,10 @@ export function HokimActiveAccountCard({
           <Text strong style={{ color: themeColors.colorSuccess }}>Фаол</Text>
         </Descriptions.Item>
         <Descriptions.Item label="Яратилган вақти">
-          {new Date(account.createdAt).toLocaleString('uz-UZ')}
+          {formatTashkentDateTime(account.createdAt)}
         </Descriptions.Item>
         <Descriptions.Item label="Охирги янгиланиш">
-          {new Date(account.updatedAt).toLocaleString('uz-UZ')}
+          {formatTashkentDateTime(account.updatedAt)}
         </Descriptions.Item>
       </Descriptions>
     </Card>

@@ -48,12 +48,7 @@ function handleArchivedMahallaError(err: unknown, reply: FastifyReply, req: Fast
   }
 
   req.log.error({ err }, 'Archived mahalla operation failed');
-  return reply.status(500).send({
-    error: {
-      code: 'INTERNAL_ERROR',
-      message: err instanceof Error ? err.message : 'Кутилмаган хатолик юз берди.',
-    },
-  });
+  throw err;
 }
 
 export function registerArchivedMahallasRoutes(
@@ -95,6 +90,7 @@ export function registerArchivedMahallasRoutes(
             db,
             req.params.topicId,
             req.body.confirmMahallaName,
+            req.actor ? { id: req.actor.id, role: req.actor.role } : undefined,
           );
           return reply.status(200).send(result);
         } catch (err: unknown) {

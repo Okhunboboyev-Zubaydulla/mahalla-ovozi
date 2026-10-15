@@ -51,7 +51,7 @@ export const ListSignalsQuerySchema = z.object({
   endDate: z.string().datetime({ offset: true }).optional(),
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
-  direction: z.enum(['forward', 'backward']).default('forward'),
+  direction: z.literal('forward').default('forward'),
 });
 export type ListSignalsQuery = z.infer<typeof ListSignalsQuerySchema>;
 

@@ -33,6 +33,7 @@ import { TelegramGroupTable } from '../components/TelegramGroupTable.js';
 import { ReplaceBotModal } from '../components/ReplaceBotModal.js';
 import { DisconnectBotModal } from '../components/DisconnectBotModal.js';
 import { useOnlineStatus } from '../hooks/useOnlineStatus.js';
+import { formatTashkentDateTime } from '../lib/formatters.js';
 import { themeColors } from '../theme/antd-theme.js';
 
 const { Title, Text } = Typography;
@@ -206,7 +207,7 @@ export function TelegramSetupPage({ districtId }: TelegramSetupPageProps) {
                 </Descriptions.Item>
                 <Descriptions.Item label="Охирги текширилган вақт">
                   <Text type="secondary">
-                    {new Date(bot.lastValidatedAt).toLocaleString('uz-UZ')}
+                    {formatTashkentDateTime(bot.lastValidatedAt)}
                   </Text>
                 </Descriptions.Item>
               </Descriptions>

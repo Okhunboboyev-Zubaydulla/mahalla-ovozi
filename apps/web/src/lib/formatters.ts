@@ -16,6 +16,23 @@ export function formatTashkentDate(isoString: string | null | undefined): string
   }
 }
 
+export function formatTashkentDateTime(
+  input: string | Date | null | undefined,
+  options?: Intl.DateTimeFormatOptions
+): string {
+  if (!input) return '—';
+  try {
+    const date = typeof input === 'string' ? new Date(input) : input;
+    if (Number.isNaN(date.getTime())) return typeof input === 'string' ? input : '—';
+    return date.toLocaleString('uz-UZ', {
+      timeZone: 'Asia/Tashkent',
+      ...options,
+    });
+  } catch {
+    return typeof input === 'string' ? input : '—';
+  }
+}
+
 export function formatTashkentTime(isoString: string | null | undefined): string {
   if (!isoString) return '';
   try {

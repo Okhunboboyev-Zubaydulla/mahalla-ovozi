@@ -45,18 +45,12 @@ export const DistrictOnboardingChecklist: React.FC<DistrictOnboardingChecklistPr
   const [activationModalOpen, setActivationModalOpen] = useState(false);
   const [editDrawerOpen, setEditDrawerOpen] = useState(false);
 
-  const { data: districtData } = useQuery({
+  const { data: districtData, isLoading: isDistrictLoading } = useQuery({
     queryKey: districtQueryKeys.district(districtId),
     queryFn: () => districtClient.getDistrict(districtId),
     enabled: !!districtId,
   });
-  const district = districtData?.district || (readiness ? {
-    id: districtId,
-    name: readiness.districtName,
-    region: undefined,
-    status: readiness.status,
-    createdAt: readiness.evaluatedAt,
-  } : null);
+  const district = districtData?.district ?? null;
 
   if (isLoading) {
     return (
@@ -178,6 +172,8 @@ export const DistrictOnboardingChecklist: React.FC<DistrictOnboardingChecklistPr
                   type="default"
                   icon={<EditOutlined />}
                   onClick={() => setEditDrawerOpen(true)}
+                  disabled={!district}
+                  loading={isDistrictLoading}
                   style={{ minHeight: 32 }}
                 >
                   Таҳрирлаш
@@ -350,11 +346,13 @@ export const DistrictOnboardingChecklist: React.FC<DistrictOnboardingChecklistPr
       />
 
       {/* Edit District Drawer */}
-      <EditDistrictDrawer
-        open={editDrawerOpen}
-        district={district || null}
-        onClose={() => setEditDrawerOpen(false)}
-      />
+      {district && (
+        <EditDistrictDrawer
+          open={editDrawerOpen}
+          district={district}
+          onClose={() => setEditDrawerOpen(false)}
+        />
+      )}
     </div>
   );
 };

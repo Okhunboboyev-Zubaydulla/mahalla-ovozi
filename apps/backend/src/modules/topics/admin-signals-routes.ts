@@ -13,6 +13,7 @@ import {
   BatchDeleteSignalsRequestSchema,
 } from '@mahalla-ovozi/api-contracts';
 import { createRequireProductOwner } from '../auth/require-auth.js';
+import { verifyStateChangingOrigin } from '../auth/origin-guard.js';
 import {
   listSignals,
   getSignalDetail,
@@ -51,12 +52,7 @@ function handleSignalError(err: unknown, reply: FastifyReply, req?: FastifyReque
   }
 
   req?.log.error({ err }, 'Admin signal operation failed');
-  return reply.status(500).send({
-    error: {
-      code: 'INTERNAL_ERROR',
-      message: err instanceof Error ? err.message : 'Кутилмаган хатолик юз берди.',
-    },
-  });
+  throw err;
 }
 
 export function registerAdminSignalsRoutes(
@@ -67,6 +63,7 @@ export function registerAdminSignalsRoutes(
 
   fastify.register(async (instance) => {
     const scope = instance.withTypeProvider<ZodTypeProvider>();
+    scope.addHook('preHandler', verifyStateChangingOrigin);
     scope.addHook('preHandler', createRequireProductOwner(db));
 
     // GET /api/v1/admin/signals

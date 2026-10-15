@@ -28,6 +28,7 @@ import {
 import { computeDistrictSettingsDiff } from './diff-utils.js';
 import { ConfigurationDiffViewer } from './ConfigurationDiffViewer.js';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus.js';
+import { formatTashkentDateTime } from '../../lib/formatters.js';
 import { ApiError } from '../../lib/api-client.js';
 
 const { Text, Title, Paragraph } = Typography;
@@ -142,13 +143,9 @@ export const AnalysisSettingsActivationModal: React.FC<
   };
 
   const rawDate = (activeSettings as any)?.activatedAt;
-  const parsedDate = rawDate ? new Date(rawDate) : null;
-  const formattedActivatedAt =
-    parsedDate && !isNaN(parsedDate.getTime())
-      ? parsedDate.toLocaleString('uz-UZ', {
-          timeZone: 'Asia/Tashkent',
-        })
-      : 'Дастлабки созлама';
+  const formattedActivatedAt = rawDate
+    ? formatTashkentDateTime(rawDate)
+    : 'Дастлабки созлама';
 
   return (
     <Modal

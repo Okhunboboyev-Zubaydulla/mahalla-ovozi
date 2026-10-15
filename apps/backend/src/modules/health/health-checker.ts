@@ -30,6 +30,7 @@ export interface HealthConfig {
   staleCheckThresholdMs?: number;
   intakeDelayThresholdMs?: number;
   topicDelayThresholdMs?: number;
+  restoreHealthCacheTtlMs?: number;
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   useUpdateEvidenceText,
   useDeleteEvidence,
 } from '../../hooks/useSignalMessages.js';
+import { formatTashkentDateTime } from '../../lib/formatters.js';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -316,9 +317,7 @@ export const SignalInspectionDrawer: React.FC<SignalInspectionDrawerProps> = ({
                 {
                   key: 'timestamp',
                   label: 'Юборилган вақти',
-                  children: new Date(signal.originalTimestamp).toLocaleString('uz-UZ', {
-                    timeZone: 'Asia/Tashkent',
-                  }),
+                  children: formatTashkentDateTime(signal.originalTimestamp),
                 },
                 {
                   key: 'lanes',

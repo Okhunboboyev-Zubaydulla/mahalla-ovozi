@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import type { DistrictHokimAccount } from '@mahalla-ovozi/api-contracts';
 import { themeColors } from '../theme/antd-theme.js';
+import { formatTashkentDateTime } from '../lib/formatters.js';
 
 const { Title, Text } = Typography;
 
@@ -96,7 +97,7 @@ export function HokimDisabledAccountCard({
           <Text strong type="danger">Фаолсизлантирилган</Text>
         </Descriptions.Item>
         <Descriptions.Item label="Фаолсизлантирилган вақти">
-          {new Date(account.updatedAt).toLocaleString('uz-UZ')}
+          {formatTashkentDateTime(account.updatedAt)}
         </Descriptions.Item>
       </Descriptions>
     </Card>

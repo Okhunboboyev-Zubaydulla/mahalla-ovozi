@@ -211,7 +211,7 @@ export function registerDistrictTopicsRoutes(fastify: FastifyInstance, db: DbCli
   });
 }
 
-function handleDistrictTopicsError(err: unknown, reply: FastifyReply) {
+export function handleDistrictTopicsError(err: unknown, reply: FastifyReply) {
   if (err instanceof DistrictNotFoundError) {
     return reply.status(404).send({
       error: { code: 'DISTRICT_NOT_FOUND', message: err.message },
@@ -253,7 +253,12 @@ function handleDistrictTopicsError(err: unknown, reply: FastifyReply) {
       'code' in err && typeof (err as { code: string }).code === 'string'
         ? (err as { code: string }).code
         : 'ERROR';
-    const message = err instanceof Error ? err.message : 'Хатолик юз берди.';
+    const message =
+      statusCode >= 500
+        ? 'Серверда кутилмаган хатолик юз берди.'
+        : err instanceof Error
+          ? err.message
+          : 'Хатолик юз берди.';
     return reply.status(statusCode).send({
       error: { code, message },
     });

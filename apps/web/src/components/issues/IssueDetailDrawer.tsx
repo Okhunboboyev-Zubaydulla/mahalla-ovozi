@@ -28,6 +28,7 @@ import {
   useOperationalIssueDetail,
   useRetryOperationalIssue,
 } from '../../issues/useOperationalIssues.js';
+import { formatTashkentDateTime } from '../../lib/formatters.js';
 import { formatIssueDuration } from '../../utils/duration-format.js';
 
 const { Title, Text, Paragraph } = Typography;
@@ -290,34 +291,19 @@ export const IssueDetailDrawer: React.FC<IssueDetailDrawerProps> = ({
               {
                 key: 'startedAt',
                 label: 'Аниқланган вақт',
-                children: new Date(currentIssue.startedAt).toLocaleString(
-                  'uz-UZ',
-                  {
-                    timeZone: 'Asia/Tashkent',
-                  },
-                ),
+                children: formatTashkentDateTime(currentIssue.startedAt),
               },
               {
                 key: 'latestCheckAt',
                 label: 'Охирги текширув',
-                children: new Date(currentIssue.latestCheckAt).toLocaleString(
-                  'uz-UZ',
-                  {
-                    timeZone: 'Asia/Tashkent',
-                  },
-                ),
+                children: formatTashkentDateTime(currentIssue.latestCheckAt),
               },
               ...(currentIssue.resolvedAt
                 ? [
                     {
                       key: 'resolvedAt',
                       label: 'Бараф этилган вақт',
-                      children: new Date(currentIssue.resolvedAt).toLocaleString(
-                        'uz-UZ',
-                        {
-                          timeZone: 'Asia/Tashkent',
-                        },
-                      ),
+                      children: formatTashkentDateTime(currentIssue.resolvedAt),
                     },
                   ]
                 : []),
@@ -385,9 +371,7 @@ export const IssueDetailDrawer: React.FC<IssueDetailDrawerProps> = ({
                       </Text>
                       <br />
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        {new Date(evt.createdAt).toLocaleString('uz-UZ', {
-                          timeZone: 'Asia/Tashkent',
-                        })}
+                        {formatTashkentDateTime(evt.createdAt)}
                       </Text>
                       {evt.actorId && (
                         <div style={{ marginTop: 2 }}>

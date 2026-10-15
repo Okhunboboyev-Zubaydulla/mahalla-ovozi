@@ -8,6 +8,7 @@ import {
   deleteTopicCascadeAtomic,
   type TopicCascadeDeletionCounts,
 } from '../retention/topic-cascade-deletion.js';
+import { recordAuditEvent } from '../audit/audit-service.js';
 
 /** One ARCHIVED topic (a mahalla whose Telegram group was deleted), with its live child counts. */
 export interface ArchivedMahallaListItem {
@@ -128,6 +129,7 @@ export async function deleteArchivedMahalla(
   db: DbClient,
   topicId: string,
   confirmMahallaName: string,
+  actor?: { id?: string | null; role?: string | null },
 ): Promise<DeleteArchivedMahallaResult> {
   const cleanTopicId = topicId.trim();
   if (cleanTopicId === '') {
@@ -160,6 +162,18 @@ export async function deleteArchivedMahalla(
     }
 
     const counts = await deleteTopicCascadeAtomic(tx, lockedTopic.districtId, lockedTopic.id);
+
+    await recordAuditEvent(tx, {
+      districtId: lockedTopic.districtId,
+      actorId: actor?.id ?? null,
+      actorRole: actor?.role ?? 'PRODUCT_OWNER',
+      action: 'ARCHIVED_MAHALLA_DELETED',
+      metadata: {
+        topicId: lockedTopic.id,
+        mahallaName: lockedTopic.mahallaName,
+        counts,
+      },
+    });
 
     return { topicId: lockedTopic.id, deleted: true as const, counts };
   });

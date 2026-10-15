@@ -5,7 +5,7 @@ date: 2026-08-12
 
 # Stateful Database Sessions over Stateless JWT
 
-User authentication for both the Product Owner Console and District Hokim dashboards uses database-backed stateful session tokens stored in secure, `httpOnly`, `SameSite=Lax` cookies.
+User authentication for both the Product Owner Console and District Hokim dashboards uses database-backed stateful session tokens stored in secure, `httpOnly`, `SameSite=Strict` cookies.
 
 ## Considered Options
 

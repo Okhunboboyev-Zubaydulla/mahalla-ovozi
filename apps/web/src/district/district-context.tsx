@@ -12,6 +12,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useInRouterContext, useSearchParams } from 'react-router-dom';
 import { districtClient } from './district-client.js';
 import { districtQueryKeys } from './query-keys.js';
+import { useOptionalAuth } from '../auth/auth-context.js';
 
 export const DISTRICT_STORAGE_KEY = 'mahalla_active_district_id';
 
@@ -102,11 +103,15 @@ export function DistrictProvider({ children }: { children: ReactNode }) {
 
   const hasDirtyForms = dirtySet.size > 0;
 
+  const auth = useOptionalAuth();
+  const isProductOwner = auth ? auth.actor?.role === 'PRODUCT_OWNER' : true;
+
   // Validate active district against loaded districts list (Auto-cleanse invalid/deleted IDs)
   const { data: districtsData } = useQuery({
     queryKey: ['districts', 'list'],
     queryFn: districtClient.listDistricts,
     staleTime: 30 * 1000,
+    enabled: isProductOwner,
   });
 
   useEffect(() => {

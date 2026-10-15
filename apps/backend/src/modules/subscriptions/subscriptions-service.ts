@@ -210,44 +210,24 @@ export async function listDistrictSubscriptions(
   const results: DistrictSubscription[] = [];
 
   for (const row of allDistricts) {
-    if (!row.subId) {
-      const sub = await ensureDistrictSubscription(db, row.id, row.status);
-      results.push(
-        formatDistrictSubscription({
-          id: sub.id,
-          districtId: row.id,
-          districtName: row.name,
-          region: row.region,
-          status: sub.status,
-          statusStartedAt: sub.statusStartedAt,
-          scheduledTransitionAt: sub.scheduledTransitionAt,
-          scheduledTransitionType: sub.scheduledTransitionType,
-          externalPaymentReference: sub.externalPaymentReference,
-          internalNote: sub.internalNote,
-          updatedById: sub.updatedById,
-          createdAt: sub.createdAt,
-          updatedAt: sub.updatedAt,
-        }),
-      );
-    } else {
-      results.push(
-        formatDistrictSubscription({
-          id: row.subId,
-          districtId: row.id,
-          districtName: row.name,
-          region: row.region,
-          status: row.subStatus ?? row.status,
-          statusStartedAt: row.subStatusStartedAt ?? row.activatedAt ?? row.createdAt ?? new Date(),
-          scheduledTransitionAt: row.subScheduledTransitionAt,
-          scheduledTransitionType: row.subScheduledTransitionType,
-          externalPaymentReference: row.subExternalPaymentReference,
-          internalNote: row.subInternalNote,
-          updatedById: row.subUpdatedById,
-          createdAt: row.subCreatedAt ?? row.createdAt ?? new Date(),
-          updatedAt: row.subUpdatedAt ?? new Date(),
-        }),
-      );
-    }
+    const now = new Date();
+    results.push(
+      formatDistrictSubscription({
+        id: row.subId ?? `sub_${row.id}`,
+        districtId: row.id,
+        districtName: row.name,
+        region: row.region,
+        status: row.subStatus ?? row.status ?? 'ACTIVE',
+        statusStartedAt: row.subStatusStartedAt ?? row.activatedAt ?? row.createdAt ?? now,
+        scheduledTransitionAt: row.subScheduledTransitionAt,
+        scheduledTransitionType: row.subScheduledTransitionType,
+        externalPaymentReference: row.subExternalPaymentReference,
+        internalNote: row.subInternalNote,
+        updatedById: row.subUpdatedById,
+        createdAt: row.subCreatedAt ?? row.createdAt ?? now,
+        updatedAt: row.subUpdatedAt ?? now,
+      }),
+    );
   }
 
   return results;

@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ConfigProvider, App as AntdApp } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { mahallaTheme } from './theme/antd-theme.js';
@@ -92,7 +92,12 @@ const queryClient = new QueryClient({
 
 function AuthenticatedRoot() {
   const { actor } = useAuth();
+  const location = useLocation();
+
   if (actor?.role === 'DISTRICT_HOKIM') {
+    if (location.pathname !== '/') {
+      return <Navigate to="/" replace />;
+    }
     return <HokimDashboardPage />;
   }
   return <ConsoleLayout />;
