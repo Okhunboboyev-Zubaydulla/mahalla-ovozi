@@ -163,8 +163,19 @@ export function sanitizeSenderAttribution(userMetadata: unknown): {
   const cleanUsername = rawUsername ? rawUsername.replace(/^@/, '').trim() : '';
   const authorUsername = cleanUsername.length > 0 ? `@${cleanUsername}` : null;
 
-  const firstName = typeof meta.firstName === 'string' ? meta.firstName.trim() : '';
-  const lastName = typeof meta.lastName === 'string' ? meta.lastName.trim() : '';
+  const rawFirstName =
+    typeof meta.firstName === 'string'
+      ? meta.firstName.trim()
+      : typeof meta.first_name === 'string'
+        ? meta.first_name.trim()
+        : '';
+  const firstName = /^User \d+$/i.test(rawFirstName) ? '' : rawFirstName;
+  const lastName =
+    typeof meta.lastName === 'string'
+      ? meta.lastName.trim()
+      : typeof meta.last_name === 'string'
+        ? meta.last_name.trim()
+        : '';
   const fullName = [firstName, lastName].filter(Boolean).join(' ');
   const authorName = fullName.length > 0 ? fullName : null;
 

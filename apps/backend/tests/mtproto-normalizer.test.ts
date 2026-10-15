@@ -9,6 +9,7 @@ import {
   filterTelegramMessage,
   extractReplyMetadata,
 } from '../src/modules/telegram-intake/telegram-content-qualification.js';
+import { sanitizeSenderAttribution } from '../src/modules/topics/topic-evidence-service.js';
 
 describe('MTProto Normalizer (Ticket 15 - Pure DB-Free Unit Tests)', () => {
   describe('Plain text message in a PeerChannel supergroup', () => {
@@ -660,6 +661,113 @@ describe('MTProto Normalizer (Ticket 15 - Pure DB-Free Unit Tests)', () => {
         cursor = (cursor as Record<string, unknown>).child;
       }
       expect(cursor).toBe(MAX_RAW_PAYLOAD_DEPTH_MARKER);
+    });
+  });
+
+  describe('User entity resolution, privacy, and Map preservation', () => {
+    it('extracts first_name, last_name, and username from payload._entities Map without payload.users', () => {
+      const entitiesMap = new Map<string, unknown>();
+      entitiesMap.set('2057516154', {
+        id: 2057516154,
+        firstName: 'Zafar',
+        lastName: 'Aliev',
+        username: 'zafar_a',
+        bot: false,
+      });
+
+      const update = {
+        _: 'UpdateNewChannelMessage',
+        message: {
+          _: 'message',
+          id: 5001,
+          peerId: { _: 'peerChannel', channelId: 1987654321 },
+          date: 1710000000,
+          message: 'Ariza matni',
+          fromId: { _: 'peerUser', userId: 2057516154 },
+        },
+        _entities: entitiesMap,
+      };
+
+      const result = normalizeMtprotoUpdate(update);
+      expect(result.status).toBe('NORMALIZED');
+      if (result.status === 'NORMALIZED') {
+        const from = result.envelope.normalizedMessage.from;
+        expect(from?.first_name).toBe('Zafar');
+        expect(from?.last_name).toBe('Aliev');
+        expect(from?.username).toBe('zafar_a');
+        expect(from?.id).toBe(2057516154);
+      }
+    });
+
+    it('omits first_name (does NOT fabricate "User <id>") when user entity is absent', () => {
+      const update = {
+        _: 'UpdateNewChannelMessage',
+        message: {
+          _: 'message',
+          id: 5002,
+          peerId: { _: 'peerChannel', channelId: 1987654321 },
+          date: 1710000000,
+          message: 'Nomsiz fuqaro xabari',
+          fromId: { _: 'peerUser', userId: 999888777 },
+        },
+        _entities: new Map(),
+      };
+
+      const result = normalizeMtprotoUpdate(update);
+      expect(result.status).toBe('NORMALIZED');
+      if (result.status === 'NORMALIZED') {
+        const from = result.envelope.normalizedMessage.from;
+        expect(from?.id).toBe(999888777);
+        expect(from?.first_name).toBeUndefined();
+        expect(from?.last_name).toBeUndefined();
+        expect(from?.username).toBeUndefined();
+      }
+    });
+
+    it('preserves Map entries as a plain object in sanitizeRawUpdatePayload', () => {
+      const entitiesMap = new Map<string, unknown>();
+      entitiesMap.set('12345', {
+        id: 12345,
+        firstName: 'Dilshod',
+      });
+
+      const raw = {
+        _entities: entitiesMap,
+        message: 'salom',
+      };
+
+      const sanitized = sanitizeRawUpdatePayload(raw) as Record<string, unknown>;
+      expect(sanitized._entities).toBeDefined();
+      expect(typeof sanitized._entities).toBe('object');
+      expect((sanitized._entities as Record<string, unknown>)['12345']).toEqual({
+        id: 12345,
+        firstName: 'Dilshod',
+      });
+      expect(() => JSON.stringify(sanitized)).not.toThrow();
+    });
+
+    it('sanitizeSenderAttribution returns authorName: null for historical "User <id>" metadata', () => {
+      const legacyMeta = {
+        firstName: 'User 2057516154',
+      };
+      const result = sanitizeSenderAttribution(legacyMeta);
+      expect(result.authorName).toBeNull();
+      expect(result.authorUsername).toBeNull();
+
+      const legacyMetaWithUsername = {
+        firstName: 'User 2057516154',
+        username: 'real_username',
+      };
+      const result2 = sanitizeSenderAttribution(legacyMetaWithUsername);
+      expect(result2.authorName).toBeNull();
+      expect(result2.authorUsername).toBe('@real_username');
+
+      const normalMeta = {
+        firstName: 'Anvar',
+        lastName: 'Sobirov',
+      };
+      const result3 = sanitizeSenderAttribution(normalMeta);
+      expect(result3.authorName).toBe('Anvar Sobirov');
     });
   });
 });

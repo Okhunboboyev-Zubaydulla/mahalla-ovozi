@@ -143,6 +143,32 @@ function sanitizeValue(value: unknown, activeStack: Set<unknown>, depth: number)
     return MAX_RAW_PAYLOAD_DEPTH_MARKER;
   }
 
+  if (value instanceof Map) {
+    activeStack.add(value);
+    try {
+      const result: Record<string, unknown> = {};
+      for (const [key, entryVal] of value.entries()) {
+        const keyStr = String(key);
+        if (keyStr === '_client' || keyStr === 'client' || keyStr === '__client') {
+          continue;
+        }
+        if (typeof entryVal === 'function' || typeof entryVal === 'symbol') {
+          continue;
+        }
+        if (isTelegramClient(entryVal)) {
+          continue;
+        }
+        const sanitizedEntry = sanitizeValue(entryVal, activeStack, depth + 1);
+        if (sanitizedEntry !== undefined) {
+          result[keyStr] = sanitizedEntry;
+        }
+      }
+      return result;
+    } finally {
+      activeStack.delete(value);
+    }
+  }
+
   if (Array.isArray(value)) {
     activeStack.add(value);
     try {
@@ -361,11 +387,54 @@ function extractChatInfo(
 }
 
 function findUserInPayload(payload: Record<string, unknown>, userId: string): MtprotoUserRecord | undefined {
+  const cleanTargetId = cleanIdString(userId);
+
+  // 1. Check payload._entities (Map or Record) - used by teleproto / GramJS runtime
+  const entities =
+    payload._entities ??
+    (payload.message && typeof payload.message === 'object'
+      ? (payload.message as Record<string, unknown>)._entities
+      : undefined);
+
+  if (entities instanceof Map) {
+    const numId = Number(cleanTargetId);
+    let direct = entities.get(userId) ?? entities.get(cleanTargetId);
+    if (!direct && Number.isFinite(numId)) {
+      direct = entities.get(numId);
+    }
+    if (direct && typeof direct === 'object') {
+      return direct as MtprotoUserRecord;
+    }
+    for (const entity of entities.values()) {
+      if (entity && typeof entity === 'object') {
+        const entRec = entity as MtprotoUserRecord;
+        if (entRec.id !== undefined && cleanIdString(entRec.id) === cleanTargetId) {
+          return entRec;
+        }
+      }
+    }
+  } else if (entities && typeof entities === 'object') {
+    const entRecord = entities as Record<string, unknown>;
+    const direct = entRecord[userId] ?? entRecord[cleanTargetId];
+    if (direct && typeof direct === 'object') {
+      return direct as MtprotoUserRecord;
+    }
+    for (const entity of Object.values(entRecord)) {
+      if (entity && typeof entity === 'object') {
+        const entRec = entity as MtprotoUserRecord;
+        if (entRec.id !== undefined && cleanIdString(entRec.id) === cleanTargetId) {
+          return entRec;
+        }
+      }
+    }
+  }
+
+  // 2. Retain payload.users array check for test fixture compatibility
   if (Array.isArray(payload.users)) {
     for (const u of payload.users) {
       if (u && typeof u === 'object') {
         const uRec = u as MtprotoUserRecord;
-        if (uRec.id !== undefined && String(uRec.id) === userId) {
+        if (uRec.id !== undefined && cleanIdString(uRec.id) === cleanTargetId) {
           return uRec;
         }
       }
@@ -414,7 +483,9 @@ function resolveUserFromPeer(
       return {
         id: Number.isFinite(userIdNum) ? userIdNum : userIdStr,
         is_bot: Boolean(userRec?.bot || userRec?.is_bot),
-        first_name: userRec?.firstName || userRec?.first_name || `User ${userIdStr}`,
+        ...(userRec?.firstName || userRec?.first_name
+          ? { first_name: userRec.firstName || userRec.first_name }
+          : {}),
         ...(userRec?.lastName || userRec?.last_name ? { last_name: userRec.lastName || userRec.last_name } : {}),
         ...(userRec?.username ? { username: userRec.username } : {}),
       };
@@ -433,7 +504,9 @@ function resolveUserFromPeer(
     return {
       id: Number.isFinite(userIdNum) ? userIdNum : userIdStr,
       is_bot: Boolean(userRec?.bot || userRec?.is_bot),
-      first_name: userRec?.firstName || userRec?.first_name || `User ${userIdStr}`,
+      ...(userRec?.firstName || userRec?.first_name
+        ? { first_name: userRec.firstName || userRec.first_name }
+        : {}),
       ...(userRec?.lastName || userRec?.last_name ? { last_name: userRec.lastName || userRec.last_name } : {}),
       ...(userRec?.username ? { username: userRec.username } : {}),
     };
