@@ -438,38 +438,31 @@ export async function updateDistrictTelegramGroup(
   let isPrivacyDisabled = group.privacyModeDisabled;
   let botMembershipStatus = group.botMembershipStatus;
 
-  if (isChatChanged) {
-    if (newTransport === 'BOT_API') {
-      if (!botRow || botRow.status !== 'VALID') {
-        throw new BotNotConnectedError(districtId);
-      }
-      const token = decryptToken({
-        encryptedToken: botRow.encryptedToken,
-        tokenIv: botRow.tokenIv,
-        tokenTag: botRow.tokenTag,
-        tokenKeyVersion: botRow.tokenKeyVersion,
-      });
+  if (newTransport === 'USERBOT') {
+    chatInfo = {
+      chatTitle: newMahallaName,
+      chatUsername: null,
+    };
+    isPrivacyDisabled = false;
+    botMembershipStatus = null;
+  } else if (isChatChanged) {
+    if (!botRow || botRow.status !== 'VALID') {
+      throw new BotNotConnectedError(districtId);
+    }
+    const token = decryptToken({
+      encryptedToken: botRow.encryptedToken,
+      tokenIv: botRow.tokenIv,
+      tokenTag: botRow.tokenTag,
+      tokenKeyVersion: botRow.tokenKeyVersion,
+    });
 
-      const validated = await validateGroupChatWithTelegram(token, newChatId, botRow.botId);
-      isPrivacyDisabled = validated.isPrivacyDisabled;
-      chatInfo = {
-        chatTitle: validated.chatTitle,
-        chatUsername: validated.chatUsername,
-      };
-      botMembershipStatus = 'member';
-    } else {
-      chatInfo = {
-        chatTitle: newMahallaName,
-        chatUsername: null,
-      };
-      isPrivacyDisabled = false;
-      botMembershipStatus = null;
-    }
-  } else if (isTransportChanged) {
-    if (newTransport === 'USERBOT') {
-      botMembershipStatus = null;
-      isPrivacyDisabled = false;
-    }
+    const validated = await validateGroupChatWithTelegram(token, newChatId, botRow.botId);
+    isPrivacyDisabled = validated.isPrivacyDisabled;
+    chatInfo = {
+      chatTitle: validated.chatTitle,
+      chatUsername: validated.chatUsername,
+    };
+    botMembershipStatus = 'member';
   }
 
   const now = new Date();
@@ -518,7 +511,12 @@ export async function updateDistrictTelegramGroup(
         telegramChatUsername: chatInfo.chatUsername,
         transport: newTransport,
         status: isChatChanged ? 'VALID' : group.status,
-        botMembershipStatus: isChatChanged || isTransportChanged ? botMembershipStatus : group.botMembershipStatus,
+        botMembershipStatus:
+          newTransport === 'USERBOT'
+            ? null
+            : isChatChanged || isTransportChanged
+              ? botMembershipStatus
+              : group.botMembershipStatus,
         privacyModeDisabled: isPrivacyDisabled,
         testMessageReceivedAt: isChatChanged ? null : group.testMessageReceivedAt,
         lastValidatedAt: isChatChanged ? now : group.lastValidatedAt,

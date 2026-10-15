@@ -390,6 +390,99 @@ describe('Ticket 06: Per-Group Transport Selection Integration Tests', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.group.transport).toBe('USERBOT');
+      expect(body.group.telegramChatTitle).toBe('HTTP Switch Mahalla');
+    });
+
+    it('synchronizes telegramChatTitle with mahallaName when switching transport to USERBOT', async () => {
+      await createActiveUserbotSession(testDistrictId);
+      const chatId = nextTestChatId();
+      const groupId = await createGroup(testDistrictId, 'Sync Title Switch Mahalla', chatId, 'BOT_API');
+
+      const res = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/districts/${testDistrictId}/groups/${groupId}`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+          'content-type': 'application/json',
+        },
+        payload: {
+          transport: 'USERBOT',
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.group.transport).toBe('USERBOT');
+      expect(body.group.telegramChatTitle).toBe('Sync Title Switch Mahalla');
+
+      const [row] = await db
+        .select()
+        .from(districtTelegramGroups)
+        .where(eq(districtTelegramGroups.id, groupId));
+      expect(row?.telegramChatTitle).toBe('Sync Title Switch Mahalla');
+    });
+
+    it('synchronizes telegramChatTitle when updating mahallaName on USERBOT group', async () => {
+      await createActiveUserbotSession(testDistrictId);
+      const chatId = nextTestChatId();
+      const groupId = await createGroup(testDistrictId, 'Eski Userbot Mahalla', chatId, 'USERBOT');
+
+      const res = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/districts/${testDistrictId}/groups/${groupId}`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+          'content-type': 'application/json',
+        },
+        payload: {
+          mahallaName: 'Yangi Userbot Mahalla',
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.group.mahallaName).toBe('Yangi Userbot Mahalla');
+      expect(body.group.telegramChatTitle).toBe('Yangi Userbot Mahalla');
+
+      const [row] = await db
+        .select()
+        .from(districtTelegramGroups)
+        .where(eq(districtTelegramGroups.id, groupId));
+      expect(row?.mahallaName).toBe('Yangi Userbot Mahalla');
+      expect(row?.telegramChatTitle).toBe('Yangi Userbot Mahalla');
+    });
+
+    it('preserves telegramChatTitle when updating mahallaName on BOT_API group with unchanged chatId', async () => {
+      const chatId = nextTestChatId();
+      const groupId = await createGroup(testDistrictId, 'Eski Bot Mahalla', chatId, 'BOT_API');
+
+      const res = await server.inject({
+        method: 'PUT',
+        url: `/api/v1/districts/${testDistrictId}/groups/${groupId}`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: poCookie,
+          'content-type': 'application/json',
+        },
+        payload: {
+          mahallaName: 'Yangi Bot Mahalla',
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.group.mahallaName).toBe('Yangi Bot Mahalla');
+      // Preserves original Telegram chat title created by createGroup ('Eski Bot Mahalla Chat')
+      expect(body.group.telegramChatTitle).toBe('Eski Bot Mahalla Chat');
+
+      const [row] = await db
+        .select()
+        .from(districtTelegramGroups)
+        .where(eq(districtTelegramGroups.id, groupId));
+      expect(row?.mahallaName).toBe('Yangi Bot Mahalla');
+      expect(row?.telegramChatTitle).toBe('Eski Bot Mahalla Chat');
     });
 
     it('refuses switch to USERBOT when session is missing with 400 USERBOT_SESSION_NOT_ACTIVE', async () => {
