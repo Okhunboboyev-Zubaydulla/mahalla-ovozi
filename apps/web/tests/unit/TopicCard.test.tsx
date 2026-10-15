@@ -44,7 +44,7 @@ describe('TopicCard Mahalla Color Styling', () => {
       </ConfigProvider>,
     );
 
-    const navbahorEl = screen.getByText('Навбаҳор маҳалласи');
+    const navbahorEl = screen.getByText('Навбаҳор');
     expect(navbahorEl).toBeDefined();
     const navbahorTypography = navbahorEl.closest('.ant-typography') as HTMLElement;
     expect(navbahorTypography).not.toBeNull();
@@ -72,7 +72,7 @@ describe('TopicCard Mahalla Color Styling', () => {
       </ConfigProvider>,
     );
 
-    const gulbodomEl = screen.getByText('Гулбодом маҳалласи');
+    const gulbodomEl = screen.getByText('Гулбодом');
     const gulbodomTypography = gulbodomEl.closest('.ant-typography') as HTMLElement;
     expect(gulbodomTypography).not.toBeNull();
     expect(gulbodomTypography.style.color).toBe(hexToRgb(colorGulbodom.text));

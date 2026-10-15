@@ -112,10 +112,6 @@ const TopicCardComponent: React.FC<TopicCardProps> = ({
     return undefined;
   }, [effectiveShowNewBadge, prefersReducedMotion]);
 
-  const formattedMahallaName = topic.mahallaName.toLowerCase().includes('маҳалла')
-    ? topic.mahallaName
-    : `${topic.mahallaName} маҳалласи`;
-
   const mahallaColor = useMemo(() => getMahallaColor(topic.mahallaName), [topic.mahallaName]);
 
   const formattedDate = formatTashkentCalendarDate(topic.calendarDay);
@@ -180,8 +176,8 @@ const TopicCardComponent: React.FC<TopicCardProps> = ({
       aria-current={isSelected ? 'true' : undefined}
       aria-label={
         topic.summary === null
-          ? `Мавзу: ${formattedMahallaName}, хулоса тайёрланмоқда`
-          : `Мавзу: ${formattedMahallaName}, ${topic.summary}`
+          ? `Мавзу: ${topic.mahallaName}, хулоса тайёрланмоқда`
+          : `Мавзу: ${topic.mahallaName}, ${topic.summary}`
       }
     >
       {/* Header: Mahalla name + Badges (New / Updated / Search Match) */}
@@ -206,7 +202,7 @@ const TopicCardComponent: React.FC<TopicCardProps> = ({
               whiteSpace: 'nowrap',
             }}
           >
-            {formattedMahallaName}
+            {topic.mahallaName}
           </Text>
         </Space>
 
