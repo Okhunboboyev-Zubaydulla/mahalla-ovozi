@@ -452,6 +452,7 @@ describe('Hokim Dashboard Component & Integration Tests (Story 3.1)', () => {
             leaderTopicCount: 1,
             isTie: false,
             tiedCount: 0,
+            tiedLanes: [],
             isZero: false,
           },
           card5: {
@@ -460,6 +461,7 @@ describe('Hokim Dashboard Component & Integration Tests (Story 3.1)', () => {
             leaderTopicCount: 1,
             isTie: false,
             tiedCount: 0,
+            tiedMahallas: [],
             isZero: false,
           },
         };

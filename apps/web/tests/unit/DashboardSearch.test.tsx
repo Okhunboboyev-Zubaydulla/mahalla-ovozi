@@ -272,6 +272,7 @@ describe('Story 3.7: Private Lexical Search Frontend Unit Tests', () => {
         leaderTopicCount: 0,
         isTie: false,
         tiedCount: 0,
+        tiedLanes: [],
         isZero: true,
       },
       card5: {
@@ -280,6 +281,7 @@ describe('Story 3.7: Private Lexical Search Frontend Unit Tests', () => {
         leaderTopicCount: 0,
         isTie: false,
         tiedCount: 0,
+        tiedMahallas: [],
         isZero: true,
       },
     };

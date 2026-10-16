@@ -588,6 +588,8 @@ describe('Story 3.5: Neutral Statistics Aggregation Integration Tests', () => {
       expect(data.card4.leaderLane).toBe('WATER');
       expect(data.card4.leaderTopicCount).toBe(2);
       expect(data.card4.isTie).toBe(false);
+      expect(data.card4.tiedCount).toBe(0);
+      expect(data.card4.tiedLanes).toEqual([]);
       expect(data.card4.isZero).toBe(false);
 
       // Card 5: Most active Mahalla
@@ -597,6 +599,8 @@ describe('Story 3.5: Neutral Statistics Aggregation Integration Tests', () => {
       expect(data.card5.leaderMahalla).toBe('Наврўз');
       expect(data.card5.leaderTopicCount).toBe(2);
       expect(data.card5.isTie).toBe(false);
+      expect(data.card5.tiedCount).toBe(0);
+      expect(data.card5.tiedMahallas).toEqual([]);
       expect(data.card5.isZero).toBe(false);
     });
   });
@@ -619,6 +623,7 @@ describe('Story 3.5: Neutral Statistics Aggregation Integration Tests', () => {
       expect(data.card4.mode).toBe('most_active_service_lane');
       expect(data.card4.isTie).toBe(true);
       expect(data.card4.tiedCount).toBe(3);
+      expect(data.card4.tiedLanes).toEqual(['ELECTRICITY', 'GAS', 'WASTE']);
       expect(data.card4.leaderLane).toBeNull();
       expect(data.card4.leaderTopicCount).toBe(1);
       expect(data.card4.isZero).toBe(false);
@@ -682,6 +687,31 @@ describe('Story 3.5: Neutral Statistics Aggregation Integration Tests', () => {
       expect(data.card5.multiEvidenceTopicCount).toBe(1);
     });
 
+    it('detects a tie when multiple mahallas share the maximum topic count', async () => {
+      const res = await server.inject({
+        method: 'GET',
+        url: `/api/v1/hokim/topics/statistics?dateScope=custom&dateFrom=${yesterdayCalendarDay}&dateTo=${yesterdayCalendarDay}`,
+        headers: {
+          ...SAME_ORIGIN_HEADERS,
+          cookie: hokimACookie,
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const data = JSON.parse(res.body);
+
+      expect(data.card5.mode).toBe('most_active_mahalla');
+      expect(data.card5.isTie).toBe(true);
+      expect(data.card5.tiedCount).toBe(3);
+      expect(data.card5.leaderMahalla).toBeNull();
+      expect(data.card5.leaderTopicCount).toBe(1);
+      expect(data.card5.isZero).toBe(false);
+      expect(data.card5.tiedMahallas).toHaveLength(3);
+      expect(data.card5.tiedMahallas).toEqual(
+        expect.arrayContaining(['Боғбон', 'Шодлик', 'Наврўз']),
+      );
+    });
+
     it('handles all-zero state with zero-precedence over ties', async () => {
       // Query for an empty date range with no topics (e.g. 10 days ago)
       const tenDaysAgo = getTashkentCalendarDay(nowEpoch - 10 * 86400);
@@ -702,11 +732,13 @@ describe('Story 3.5: Neutral Statistics Aggregation Integration Tests', () => {
       expect(data.card4.isZero).toBe(true);
       expect(data.card4.leaderLane).toBeNull();
       expect(data.card4.leaderTopicCount).toBe(0);
+      expect(data.card4.tiedLanes).toEqual([]);
 
       expect(data.card5.mode).toBe('most_active_mahalla');
       expect(data.card5.isZero).toBe(true);
       expect(data.card5.leaderMahalla).toBeNull();
       expect(data.card5.leaderTopicCount).toBe(0);
+      expect(data.card5.tiedMahallas).toEqual([]);
     });
   });
 

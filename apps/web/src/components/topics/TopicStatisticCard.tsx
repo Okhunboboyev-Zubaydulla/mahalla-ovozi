@@ -1,7 +1,14 @@
 import React from 'react';
-import { Skeleton } from 'antd';
+import { Skeleton, Popover } from 'antd';
+import { InfoCircleOutlined } from '@ant-design/icons';
 import { TopicStatisticCard1Comparison } from '@mahalla-ovozi/api-contracts';
 import { themeColors } from '../../theme/antd-theme.js';
+
+export interface TopicStatisticCardPopoverProps {
+  title: string;
+  subtitle?: string;
+  items: string[];
+}
 
 export interface TopicStatisticCardProps {
   id?: string;
@@ -14,6 +21,7 @@ export interface TopicStatisticCardProps {
   isLoading?: boolean;
   comparison?: TopicStatisticCard1Comparison;
   hasComparisonSlot?: boolean;
+  popover?: TopicStatisticCardPopoverProps;
 }
 
 export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
@@ -27,6 +35,7 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
   isLoading = false,
   comparison,
   hasComparisonSlot = false,
+  popover,
 }) => {
   if (isLoading) {
     const showComparisonSkeleton = hasComparisonSlot || comparison !== undefined;
@@ -89,10 +98,13 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
     );
   }
 
-  const isLongTextValue = typeof value === 'string' && value.length > 12;
+  const isLongTextValue = typeof value === 'string' && (value.length > 12 || value.includes('•'));
 
   // Build accessible ARIA description
   let ariaLabel = `${title}: ${value} ${subtitle}`;
+  if (popover && popover.items.length > 0) {
+    ariaLabel = `${title}: ${value} ${subtitle}. ${popover.title}: ${popover.items.join(', ')}`;
+  }
   if (comparison) {
     if (comparison.isAvailable) {
       const deltaText =
@@ -112,6 +124,81 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
       }
     }
   }
+
+  const popoverContent = popover ? (
+    <div style={{ maxWidth: 260, padding: '2px 0' }} data-testid="statistic-card-popover-content">
+      <div
+        style={{
+          fontWeight: 600,
+          fontSize: 13,
+          color: '#0F172A',
+          lineHeight: '18px',
+        }}
+      >
+        {popover.title}
+      </div>
+      {popover.subtitle && (
+        <div
+          style={{
+            fontSize: 11,
+            color: '#64748B',
+            marginTop: 2,
+            marginBottom: 6,
+            lineHeight: '14px',
+          }}
+        >
+          {popover.subtitle}
+        </div>
+      )}
+      <div
+        style={{
+          maxHeight: 240,
+          overflowY: 'auto',
+          marginTop: popover.subtitle ? 0 : 6,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          paddingRight: 4,
+        }}
+        data-testid="popover-items-list"
+      >
+        {popover.items.map((item, index) => (
+          <div
+            key={`${item}-${index}`}
+            style={{
+              fontSize: 12,
+              lineHeight: '18px',
+              color: '#334155',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <span
+              style={{
+                width: 4,
+                height: 4,
+                borderRadius: '50%',
+                backgroundColor: '#94A3B8',
+                flexShrink: 0,
+              }}
+              aria-hidden="true"
+            />
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={item}
+            >
+              {item}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div
@@ -176,23 +263,77 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
         </div>
       </div>
 
-      <div
-        style={{
-          fontSize: isLongTextValue ? 16 : 22,
-          fontWeight: 600,
-          lineHeight: isLongTextValue ? '22px' : '26px',
-          color: '#0F172A',
-          fontVariantNumeric: 'tabular-nums',
-          fontFeatureSettings: '"tnum"',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-        title={typeof value === 'string' ? value : String(value)}
-        aria-hidden="true"
-      >
-        {value}
-      </div>
+      {popover ? (
+        <Popover
+          content={popoverContent}
+          trigger={['hover', 'click']}
+          placement="bottom"
+          overlayStyle={{ zIndex: 1050 }}
+        >
+          <button
+            type="button"
+            data-testid="statistic-card-popover-trigger"
+            aria-label={`${title}: ${value}. ${popover.title}. Батафсил кўриш учун босинг.`}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              margin: 0,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              maxWidth: '100%',
+              textAlign: 'left',
+              font: 'inherit',
+              borderRadius: 4,
+            }}
+          >
+            <span
+              style={{
+                fontSize: isLongTextValue ? 16 : 22,
+                fontWeight: 600,
+                lineHeight: isLongTextValue ? '22px' : '26px',
+                color: '#0F172A',
+                fontVariantNumeric: 'tabular-nums',
+                fontFeatureSettings: '"tnum"',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={typeof value === 'string' ? value : String(value)}
+            >
+              {value}
+            </span>
+            <InfoCircleOutlined
+              style={{
+                fontSize: 13,
+                color: '#64748B',
+                flexShrink: 0,
+              }}
+              aria-hidden="true"
+            />
+          </button>
+        </Popover>
+      ) : (
+        <div
+          style={{
+            fontSize: isLongTextValue ? 16 : 22,
+            fontWeight: 600,
+            lineHeight: isLongTextValue ? '22px' : '26px',
+            color: '#0F172A',
+            fontVariantNumeric: 'tabular-nums',
+            fontFeatureSettings: '"tnum"',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={typeof value === 'string' ? value : String(value)}
+          aria-hidden="true"
+        >
+          {value}
+        </div>
+      )}
 
       {/* Bottom row: Subtitle and Optional Prior-Period Comparison Sub-block (Side-by-Side) */}
       <div

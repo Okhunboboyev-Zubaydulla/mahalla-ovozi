@@ -29,6 +29,11 @@ interface CardDescriptor {
   iconColor?: string;
   comparison?: TopicStatisticCard1Comparison;
   hasComparisonSlot?: boolean;
+  popover?: {
+    title: string;
+    subtitle?: string;
+    items: string[];
+  };
 }
 
 export interface TopicStatisticsStripProps {
@@ -99,6 +104,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
   let card4Title = 'Энг фаол соҳа';
   let card4Value: string | number = '—';
   let card4Subtitle = 'мавзулар йўқ';
+  let card4Popover: { title: string; subtitle?: string; items: string[] } | undefined;
 
   if (statistics?.card4) {
     if (statistics.card4.mode === 'multi_lane_topics') {
@@ -111,8 +117,25 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
         card4Value = '—';
         card4Subtitle = 'мавзулар йўқ';
       } else if (statistics.card4.isTie) {
-        card4Value = `Тенг: ${statistics.card4.tiedCount} та йўналиш`;
-        card4Subtitle = `${statistics.card4.leaderTopicCount} тадан мавзу`;
+        const tiedLanes = statistics.card4.tiedLanes ?? [];
+        const [lane0, lane1] = tiedLanes;
+        if (tiedLanes.length === 2 && lane0 && lane1) {
+          const name0 = LANE_LABELS[lane0] ?? lane0;
+          const name1 = LANE_LABELS[lane1] ?? lane1;
+          card4Value = `${name0} • ${name1}`;
+          card4Subtitle = `${statistics.card4.leaderTopicCount} тадан мавзу`;
+        } else if (tiedLanes.length > 2) {
+          card4Value = `Тенг: ${statistics.card4.tiedCount} та йўналиш`;
+          card4Subtitle = `${statistics.card4.leaderTopicCount} тадан мавзу`;
+          card4Popover = {
+            title: 'Тенг кўрсаткичли соҳалар',
+            subtitle: `${statistics.card4.leaderTopicCount} тадан мавзу`,
+            items: tiedLanes.map((lane) => LANE_LABELS[lane] ?? lane),
+          };
+        } else {
+          card4Value = `Тенг: ${statistics.card4.tiedCount} та йўналиш`;
+          card4Subtitle = `${statistics.card4.leaderTopicCount} тадан мавзу`;
+        }
       } else {
         card4Value = statistics.card4.leaderLane ? LANE_LABELS[statistics.card4.leaderLane] : '—';
         card4Subtitle = `${statistics.card4.leaderTopicCount} та мавзу`;
@@ -120,7 +143,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
     }
   }
 
-  const card4 = {
+  const card4: CardDescriptor = {
     id: 'statistic-card-4',
     title: card4Title,
     value: card4Value,
@@ -128,12 +151,14 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
     icon: <AppstoreOutlined />,
     iconBgColor: '#F3E8FF',
     iconColor: '#7C3AED',
+    popover: card4Popover,
   };
 
   // Card 5: Most active Mahalla or multi-evidence fallback
   let card5Title = 'Энг фаол маҳалла';
   let card5Value: string | number = '—';
   let card5Subtitle = 'мавзулар йўқ';
+  let card5Popover: { title: string; subtitle?: string; items: string[] } | undefined;
 
   if (statistics?.card5) {
     if (statistics.card5.mode === 'multi_evidence_topics') {
@@ -146,8 +171,23 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
         card5Value = '—';
         card5Subtitle = 'мавзулар йўқ';
       } else if (statistics.card5.isTie) {
-        card5Value = `Тенг: ${statistics.card5.tiedCount} та маҳалла`;
-        card5Subtitle = `${statistics.card5.leaderTopicCount} тадан мавзу`;
+        const tiedMahallas = statistics.card5.tiedMahallas ?? [];
+        const [mahalla0, mahalla1] = tiedMahallas;
+        if (tiedMahallas.length === 2 && mahalla0 && mahalla1) {
+          card5Value = `${mahalla0} • ${mahalla1}`;
+          card5Subtitle = `${statistics.card5.leaderTopicCount} тадан мавзу`;
+        } else if (tiedMahallas.length > 2) {
+          card5Value = `Тенг: ${statistics.card5.tiedCount} та маҳалла`;
+          card5Subtitle = `${statistics.card5.leaderTopicCount} тадан мавзу`;
+          card5Popover = {
+            title: 'Тенг кўрсаткичли маҳаллалар',
+            subtitle: `${statistics.card5.leaderTopicCount} тадан мавзу`,
+            items: tiedMahallas,
+          };
+        } else {
+          card5Value = `Тенг: ${statistics.card5.tiedCount} та маҳалла`;
+          card5Subtitle = `${statistics.card5.leaderTopicCount} тадан мавзу`;
+        }
       } else {
         card5Value = statistics.card5.leaderMahalla || '—';
         card5Subtitle = `${statistics.card5.leaderTopicCount} та мавзу`;
@@ -155,7 +195,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
     }
   }
 
-  const card5 = {
+  const card5: CardDescriptor = {
     id: 'statistic-card-5',
     title: card5Title,
     value: card5Value,
@@ -163,6 +203,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
     icon: <EnvironmentOutlined />,
     iconBgColor: '#D1FAE5',
     iconColor: '#059669',
+    popover: card5Popover,
   };
 
   const cards: CardDescriptor[] = [card1, card2, card3, card4, card5];
@@ -422,6 +463,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
                 isLoading={isLoading}
                 comparison={card.comparison}
                 hasComparisonSlot={card.hasComparisonSlot}
+                popover={card.popover}
               />
             </div>
           ))}

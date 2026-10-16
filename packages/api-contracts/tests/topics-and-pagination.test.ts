@@ -11,6 +11,8 @@ import {
   TopicBaseFilterSchema,
   HokimTopicBoardQuerySchema,
   HokimLaneQuerySchema,
+  TopicStatisticCard4Schema,
+  TopicStatisticCard5Schema,
   createKeysetPageSchema,
   encodeKeysetCursor,
   decodeKeysetCursor,
@@ -190,4 +192,63 @@ describe('Topics and Pagination Contracts', () => {
     expect(parsed.pagination.hasNextPage).toBe(true);
     expect(parsed.pagination.nextCursor).toBe(validPage.pagination.nextCursor);
   });
+
+  it('validates TopicStatisticCard4Schema and TopicStatisticCard5Schema with tied fields and defaults', () => {
+    // Card 4 with tie
+    const card4Tie = TopicStatisticCard4Schema.parse({
+      mode: 'most_active_service_lane',
+      leaderLane: null,
+      leaderTopicCount: 4,
+      isTie: true,
+      tiedCount: 2,
+      tiedLanes: ['WATER', 'GAS'],
+      isZero: false,
+    });
+    expect(card4Tie.mode).toBe('most_active_service_lane');
+    if (card4Tie.mode === 'most_active_service_lane') {
+      expect(card4Tie.tiedLanes).toEqual(['WATER', 'GAS']);
+    }
+
+    // Card 4 with default tiedLanes
+    const card4Default = TopicStatisticCard4Schema.parse({
+      mode: 'most_active_service_lane',
+      leaderLane: 'WATER',
+      leaderTopicCount: 5,
+      isTie: false,
+      tiedCount: 0,
+      isZero: false,
+    });
+    if (card4Default.mode === 'most_active_service_lane') {
+      expect(card4Default.tiedLanes).toEqual([]);
+    }
+
+    // Card 5 with tie
+    const card5Tie = TopicStatisticCard5Schema.parse({
+      mode: 'most_active_mahalla',
+      leaderMahalla: null,
+      leaderTopicCount: 3,
+      isTie: true,
+      tiedCount: 2,
+      tiedMahallas: ['Наврўз', 'Боғбон'],
+      isZero: false,
+    });
+    expect(card5Tie.mode).toBe('most_active_mahalla');
+    if (card5Tie.mode === 'most_active_mahalla') {
+      expect(card5Tie.tiedMahallas).toEqual(['Наврўз', 'Боғбон']);
+    }
+
+    // Card 5 with default tiedMahallas
+    const card5Default = TopicStatisticCard5Schema.parse({
+      mode: 'most_active_mahalla',
+      leaderMahalla: 'Наврўз',
+      leaderTopicCount: 3,
+      isTie: false,
+      tiedCount: 0,
+      isZero: false,
+    });
+    if (card5Default.mode === 'most_active_mahalla') {
+      expect(card5Default.tiedMahallas).toEqual([]);
+    }
+  });
 });
+

@@ -896,6 +896,7 @@ export async function queryHokimStatistics(
         leaderTopicCount: 0,
         isTie: false,
         tiedCount: 0,
+        tiedLanes: [],
         isZero: true,
       };
     } else {
@@ -907,6 +908,7 @@ export async function queryHokimStatistics(
           leaderTopicCount: maxCount,
           isTie: true,
           tiedCount: tied.length,
+          tiedLanes: tied,
           isZero: false,
         };
       } else {
@@ -916,6 +918,7 @@ export async function queryHokimStatistics(
           leaderTopicCount: maxCount,
           isTie: false,
           tiedCount: 0,
+          tiedLanes: [],
           isZero: false,
         };
       }
@@ -948,6 +951,7 @@ export async function queryHokimStatistics(
         leaderTopicCount: 0,
         isTie: false,
         tiedCount: 0,
+        tiedMahallas: [],
         isZero: true,
       };
     } else {
@@ -966,6 +970,7 @@ export async function queryHokimStatistics(
           leaderTopicCount: 0,
           isTie: false,
           tiedCount: 0,
+          tiedMahallas: [],
           isZero: true,
         };
       } else {
@@ -980,6 +985,7 @@ export async function queryHokimStatistics(
             leaderTopicCount: maxCount,
             isTie: true,
             tiedCount: tied.length,
+            tiedMahallas: tied,
             isZero: false,
           };
         } else {
@@ -989,6 +995,7 @@ export async function queryHokimStatistics(
             leaderTopicCount: maxCount,
             isTie: false,
             tiedCount: 0,
+            tiedMahallas: [],
             isZero: false,
           };
         }

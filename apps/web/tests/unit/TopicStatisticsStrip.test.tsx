@@ -31,6 +31,7 @@ const mockDefaultStats: HokimTopicStatisticsResponse = {
     leaderTopicCount: 7,
     isTie: false,
     tiedCount: 0,
+    tiedLanes: [],
     isZero: false,
   },
   card5: {
@@ -39,6 +40,7 @@ const mockDefaultStats: HokimTopicStatisticsResponse = {
     leaderTopicCount: 5,
     isTie: false,
     tiedCount: 0,
+    tiedMahallas: [],
     isZero: false,
   },
 };
@@ -165,7 +167,7 @@ describe('TopicStatisticsStrip Component Tests', () => {
     expect(screen.getByText('99')).toBeTruthy();
   });
 
-  it('renders non-zero tie representation on Card 4 and Card 5 (AC 11)', () => {
+  it('renders fallback tie representation on Card 4 and Card 5 when tied list length < 2 (AC 11 fallback)', () => {
     const tieStats: HokimTopicStatisticsResponse = {
       ...mockDefaultStats,
       card4: {
@@ -174,6 +176,7 @@ describe('TopicStatisticsStrip Component Tests', () => {
         leaderTopicCount: 4,
         isTie: true,
         tiedCount: 2,
+        tiedLanes: [],
         isZero: false,
       },
       card5: {
@@ -182,6 +185,7 @@ describe('TopicStatisticsStrip Component Tests', () => {
         leaderTopicCount: 3,
         isTie: true,
         tiedCount: 3,
+        tiedMahallas: [],
         isZero: false,
       },
     };
@@ -195,6 +199,103 @@ describe('TopicStatisticsStrip Component Tests', () => {
     expect(screen.getByText('3 тадан мавзу')).toBeTruthy();
   });
 
+  it('renders 2-item tie with bullet joining on Card 4 and Card 5', () => {
+    const tie2Stats: HokimTopicStatisticsResponse = {
+      ...mockDefaultStats,
+      card4: {
+        mode: 'most_active_service_lane',
+        leaderLane: null,
+        leaderTopicCount: 4,
+        isTie: true,
+        tiedCount: 2,
+        tiedLanes: ['WATER', 'ELECTRICITY'],
+        isZero: false,
+      },
+      card5: {
+        mode: 'most_active_mahalla',
+        leaderMahalla: null,
+        leaderTopicCount: 3,
+        isTie: true,
+        tiedCount: 2,
+        tiedMahallas: ['Наврўз', 'Бўстон'],
+        isZero: false,
+      },
+    };
+
+    renderWithProviders(<TopicStatisticsStrip statistics={tie2Stats} />);
+
+    // Card 4: localized names joined by bullet
+    expect(screen.getByText('Сув • Электр')).toBeTruthy();
+    expect(screen.getByText('4 тадан мавзу')).toBeTruthy();
+
+    // Card 5: mahalla names joined by bullet
+    expect(screen.getByText('Наврўз • Бўстон')).toBeTruthy();
+    expect(screen.getByText('3 тадан мавзу')).toBeTruthy();
+
+    // Should NOT have popover triggers for 2-item ties
+    const triggers = screen.queryAllByTestId('statistic-card-popover-trigger');
+    expect(triggers.length).toBe(0);
+  });
+
+  it('renders 3+ item tie with popover trigger and interactive list on Card 4 and Card 5', () => {
+    const tie3Stats: HokimTopicStatisticsResponse = {
+      ...mockDefaultStats,
+      card4: {
+        mode: 'most_active_service_lane',
+        leaderLane: null,
+        leaderTopicCount: 5,
+        isTie: true,
+        tiedCount: 3,
+        tiedLanes: ['WATER', 'ELECTRICITY', 'GAS'],
+        isZero: false,
+      },
+      card5: {
+        mode: 'most_active_mahalla',
+        leaderMahalla: null,
+        leaderTopicCount: 4,
+        isTie: true,
+        tiedCount: 4,
+        tiedMahallas: ['Наврўз', 'Бўстон', 'Олмазор', 'Шодилик'],
+        isZero: false,
+      },
+    };
+
+    renderWithProviders(<TopicStatisticsStrip statistics={tie3Stats} />);
+
+    // Card 4: generic tie count header
+    expect(screen.getByText('Тенг: 3 та йўналиш')).toBeTruthy();
+    expect(screen.getByText('5 тадан мавзу')).toBeTruthy();
+
+    // Card 5: generic tie count header
+    expect(screen.getByText('Тенг: 4 та маҳалла')).toBeTruthy();
+    expect(screen.getByText('4 тадан мавзу')).toBeTruthy();
+
+    // Triggers exist for both 3+ ties
+    const triggers = screen.getAllByTestId('statistic-card-popover-trigger');
+    expect(triggers.length).toBe(2);
+
+    // Click Card 4 popover trigger
+    fireEvent.click(triggers[0]!);
+    expect(screen.getByText('Тенг кўрсаткичли соҳалар')).toBeTruthy();
+    // Subtitle inside popover
+    const popoverSubtitles = screen.getAllByText('5 тадан мавзу');
+    expect(popoverSubtitles.length).toBeGreaterThanOrEqual(1);
+    // Localized items in Card 4 popover
+    expect(screen.getByText('Сув')).toBeTruthy();
+    expect(screen.getByText('Электр')).toBeTruthy();
+    expect(screen.getByText('Газ')).toBeTruthy();
+
+    // Click Card 5 popover trigger
+    fireEvent.click(triggers[1]!);
+    expect(screen.getByText('Тенг кўрсаткичли маҳаллалар')).toBeTruthy();
+    const mahallaSubtitles = screen.getAllByText('4 тадан мавзу');
+    expect(mahallaSubtitles.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Наврўз')).toBeTruthy();
+    expect(screen.getByText('Бўстон')).toBeTruthy();
+    expect(screen.getByText('Олмазор')).toBeTruthy();
+    expect(screen.getByText('Шодилик')).toBeTruthy();
+  });
+
   it('renders all-zero state with zero-precedence on Card 4 and Card 5 (AC 12)', () => {
     const zeroStats: HokimTopicStatisticsResponse = {
       ...mockDefaultStats,
@@ -205,6 +306,7 @@ describe('TopicStatisticsStrip Component Tests', () => {
         leaderTopicCount: 0,
         isTie: false,
         tiedCount: 0,
+        tiedLanes: [],
         isZero: true,
       },
       card5: {
@@ -213,6 +315,7 @@ describe('TopicStatisticsStrip Component Tests', () => {
         leaderTopicCount: 0,
         isTie: false,
         tiedCount: 0,
+        tiedMahallas: [],
         isZero: true,
       },
     };

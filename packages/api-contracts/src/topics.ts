@@ -357,6 +357,7 @@ export const TopicStatisticCard4Schema = z.discriminatedUnion('mode', [
     leaderTopicCount: z.number().int().min(0),
     isTie: z.boolean(),
     tiedCount: z.number().int().min(0),
+    tiedLanes: z.array(QualifyingLaneSchema).default([]),
     isZero: z.boolean(),
   }),
   z.object({
@@ -373,6 +374,7 @@ export const TopicStatisticCard5Schema = z.discriminatedUnion('mode', [
     leaderTopicCount: z.number().int().min(0),
     isTie: z.boolean(),
     tiedCount: z.number().int().min(0),
+    tiedMahallas: z.array(z.string()).default([]),
     isZero: z.boolean(),
   }),
   z.object({

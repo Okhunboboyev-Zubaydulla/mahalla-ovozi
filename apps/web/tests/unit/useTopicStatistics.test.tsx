@@ -41,6 +41,7 @@ const mockStatisticsResponse: HokimTopicStatisticsResponse = {
     leaderTopicCount: 6,
     isTie: false,
     tiedCount: 0,
+    tiedLanes: [],
     isZero: false,
   },
   card5: {
@@ -49,6 +50,7 @@ const mockStatisticsResponse: HokimTopicStatisticsResponse = {
     leaderTopicCount: 5,
     isTie: false,
     tiedCount: 0,
+    tiedMahallas: [],
     isZero: false,
   },
 };
