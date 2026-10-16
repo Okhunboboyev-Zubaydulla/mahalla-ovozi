@@ -2,13 +2,15 @@ import { sql } from 'drizzle-orm';
 import type { DbClient } from '../../adapters/db/client.js';
 import { telegramIntakeRecords } from '../../adapters/db/schema/index.js';
 
+export const DEBUG_PAYLOAD_RETENTION_MS = 48 * 60 * 60 * 1000; // 48 hours (2 days)
+
 export interface DebugPayloadPurgeResult {
   purgedCount: number;
 }
 
 /**
  * Purges raw verbatimText and debug payloads from excluded telegram_intake_records
- * whose debug retention period (14 days) has expired.
+ * whose debug retention period (48 hours / 2 days) has expired.
  * Preserves the status and exclusionReason metadata.
  */
 export async function purgeExpiredDebugIntakePayloads(

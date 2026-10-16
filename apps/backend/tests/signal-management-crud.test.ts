@@ -18,7 +18,10 @@ import {
 import { createOrResetProductOwner } from '../src/modules/auth/account-service.js';
 import { COOKIE_NAME } from '../src/modules/auth/session-manager.js';
 import { createBossClient, initBossQueues } from '../src/adapters/jobs/boss-client.js';
-import { purgeExpiredDebugIntakePayloads } from '../src/modules/retention/debug-payload-retention.js';
+import {
+  purgeExpiredDebugIntakePayloads,
+  DEBUG_PAYLOAD_RETENTION_MS,
+} from '../src/modules/retention/debug-payload-retention.js';
 import { extractSignalVerbatimText } from '../src/modules/topics/topic-evidence-management-service.js';
 import type PgBoss from 'pg-boss';
 
@@ -201,7 +204,7 @@ describe('Signal & Evidence Management Console & CRUD Verification', () => {
         exclusionReason: 'ADVERTISEMENT_OR_SPAM',
         verbatimText: 'Kvartira ijaraga beriladi, arzon narxda!',
         reasoning: 'Commercial apartment rental advertisement',
-        expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+        expiresAt: new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString(),
       },
     });
 

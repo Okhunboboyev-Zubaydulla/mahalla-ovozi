@@ -31,6 +31,7 @@ import type {
 import { hasSelfContainedCivicSignal } from '../../telegram-intake/telegram-content-qualification.js';
 import { extractVerbatimDisplayText } from '../../telegram-intake/telegram-payload-text.js';
 import { clearPendingRetryFlag } from '../../issues/retry-service.js';
+import { DEBUG_PAYLOAD_RETENTION_MS } from '../../retention/debug-payload-retention.js';
 
 export interface SemanticRelevanceJobDeps {
   db: DbClient;
@@ -294,7 +295,7 @@ export async function processSemanticRelevanceJobs(
               }
 
               const allIntakeIds = allBurstIntakes.map((m) => m.intakeId);
-              const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+              const expiresAt = new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString();
               const exclusionMeta = JSON.stringify({
                 status: 'EXCLUDED',
                 exclusionReason: finalExclusionReason,
@@ -605,7 +606,7 @@ export async function processSemanticRelevanceJobs(
 
               if (excludedBurstItems.length > 0) {
                 const excludedIntakeIds = excludedBurstItems.map((m) => m.intakeId);
-                const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+                const expiresAt = new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString();
                 const exclusionMeta = JSON.stringify({
                   status: 'EXCLUDED',
                   exclusionReason: 'GENERAL_CHATTER',
@@ -671,13 +672,13 @@ export async function processSemanticRelevanceJobs(
                 retryBackoff: true,
               });
             } else {
-              // 4. Retain bounded debug payload in DB for 14 days and purge memory (Decision 1 / Bounded Debug Retention)
+              // 4. Retain bounded debug payload in DB for 48 hours (2 days) and purge memory (Decision 1 / Bounded Debug Retention)
               const allIntakeIds =
                 burstMessages && burstMessages.length > 0
                   ? burstMessages.map((m) => m.intakeId)
                   : [intakeId];
 
-              const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+              const expiresAt = new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString();
               const exclusionMeta = JSON.stringify({
                 status: 'EXCLUDED',
                 exclusionReason: aiResult.data.exclusion_reason,
