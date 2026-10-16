@@ -5,6 +5,7 @@ import { eq, and, inArray } from 'drizzle-orm';
 import type { DbClient } from '../../adapters/db/client.js';
 import {
   districts,
+  districtTelegramGroups,
   telegramIntakeRecords,
   aiOperations,
   topics,
@@ -35,6 +36,7 @@ import { resolveTargetTopic } from './topic-matching-resolver.js';
 import { calculateRetentionDeadline } from '../retention/index.js';
 import { clearPendingRetryFlag } from '../issues/retry-service.js';
 import { findUniqueViolation } from '../../adapters/db/client.js';
+import { areMahallasEquivalent } from '@mahalla-ovozi/api-contracts';
 
 /**
  * The coordinator's one retry-signalling error mode: the Mahalla snapshot, or the
@@ -163,10 +165,33 @@ export async function assignEvidenceToTopic(
     reasoning,
     burstMessages,
   } = input;
-  const mahallaName = input.mahallaName;
   let { verbatimText } = input;
 
   try {
+    // 0. Authoritative Mahalla Name Snapping:
+    // Resolve canonical registered mahalla name against district_telegram_groups in the district.
+    // Even if an input string is "Куёвбоши", it immediately snaps to registered "Куёвбоши МФЙ".
+    const districtGroups = await db
+      .select({
+        mahallaName: districtTelegramGroups.mahallaName,
+        telegramChatId: districtTelegramGroups.telegramChatId,
+      })
+      .from(districtTelegramGroups)
+      .where(
+        and(
+          eq(districtTelegramGroups.districtId, districtId),
+          inArray(districtTelegramGroups.status, ['VALID', 'ACTIVE']),
+        ),
+      );
+
+    const matchedGroup =
+      (telegramChatId
+        ? districtGroups.find((g) => g.telegramChatId === telegramChatId)
+        : undefined) ??
+      districtGroups.find((g) => areMahallasEquivalent(g.mahallaName, input.mahallaName));
+
+    const mahallaName = matchedGroup?.mahallaName.trim() ?? input.mahallaName.trim();
+
     // 1. Deduplication / Idempotency Check (AC 16 / Matrix #26)
     const [existingEvidence] = await db
       .select({

@@ -8,7 +8,7 @@ import {
   createDbClient,
   type DbClient,
 } from '../src/adapters/db/client.js';
-import { districts, telegramIntakeRecords, aiOperations, aiProviderAttempts, topics, acceptedEvidence } from '../src/adapters/db/schema/index.js';
+import { districts, districtTelegramGroups, telegramIntakeRecords, aiOperations, aiProviderAttempts, topics, acceptedEvidence } from '../src/adapters/db/schema/index.js';
 import { ensureDefaultAiProfiles } from '../src/adapters/db/seeds.js';
 import {
   createBossClient,
@@ -116,6 +116,7 @@ describe('Story 2.4: Worker Topic Assignment 28-Row Verification Matrix Integrat
     text: string;
     mahallaName?: string;
     calendarDay?: string;
+    chatId?: string;
     from?: Record<string, any>;
   }) {
     await db.insert(telegramIntakeRecords).values({
@@ -123,7 +124,7 @@ describe('Story 2.4: Worker Topic Assignment 28-Row Verification Matrix Integrat
       districtId: testDistrictId,
       mahallaName: params.mahallaName || 'Guliston',
       telegramBotId: 'bot_test_1',
-      telegramChatId: testChatId,
+      telegramChatId: params.chatId || testChatId,
       telegramMessageId: params.messageId,
       originalTimestamp: params.timestamp,
       calendarDay: params.calendarDay || '2026-08-22',
@@ -2408,5 +2409,143 @@ describe('Story 2.4: Worker Topic Assignment 28-Row Verification Matrix Integrat
         ),
       );
     expect(rows.length).toBe(1);
+  });
+
+  it('snaps incoming mahalla variation "Куёвбоши" to authoritative registered group "Куёвбоши МФЙ"', async () => {
+    const calendarDay = '2026-08-22';
+    const now = new Date();
+    const chatGroupId = `dtg_${crypto.randomUUID()}`;
+    const specificChatId = `-100${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+    // 1. Seed registered district telegram group with canonical "Куёвбоши МФЙ"
+    await db.insert(districtTelegramGroups).values({
+      id: chatGroupId,
+      districtId: testDistrictId,
+      mahallaName: 'Куёвбоши МФЙ',
+      telegramChatId: specificChatId,
+      telegramChatTitle: 'Куёвбоши МФЙ гуруҳи',
+      status: 'VALID',
+      transport: 'BOT_API',
+    });
+
+    // 2. Incoming evidence with un-suffixed mahalla name "Куёвбоши" (matched by chatId)
+    const intakeId1 = `int_${crypto.randomUUID()}`;
+    const messageId1 = `msg_${Date.now()}_1`;
+    await seedIntakeRecord({
+      intakeId: intakeId1,
+      messageId: messageId1,
+      timestamp: now,
+      text: 'Сув босими жуда паст бўлиб қолди',
+      mahallaName: 'Куёвбоши',
+      calendarDay,
+      chatId: specificChatId,
+    });
+
+    const outcome1 = await assignEvidenceToTopic(
+      {
+        db,
+        pool,
+        boss,
+        topicMatchingEvaluator: new TopicMatchingEvaluator(aiController.gateway),
+      },
+      {
+        intakeId: intakeId1,
+        districtId: testDistrictId,
+        mahallaName: 'Куёвбоши', // Raw incoming name without "МФЙ"
+        calendarDay,
+        telegramChatId: specificChatId,
+        telegramMessageId: messageId1,
+        telegramUserId: 'user_456',
+        originalTimestamp: now.toISOString(),
+        contentType: 'TEXT',
+        verbatimText: 'Сув босими жуда паст бўлиб қолди',
+        replyMetadata: null,
+        aiOperationId: `aiop_${crypto.randomUUID()}`,
+        relevantLanes: ['WATER'],
+        reasoning: 'Low water pressure',
+      },
+    );
+
+    expect(outcome1.status).toBe('ASSIGNED');
+    let firstTopicId = '';
+    if (outcome1.status === 'ASSIGNED') {
+      firstTopicId = outcome1.topicId;
+      // Must be snapped to canonical registered name
+      expect(outcome1.mahallaName).toBe('Куёвбоши МФЙ');
+      expect(outcome1.isNewTopic).toBe(true);
+
+      // Verify DB Topic record has canonical name
+      const [topicRow] = await db.select().from(topics).where(eq(topics.id, outcome1.topicId));
+      expect(topicRow?.mahallaName).toBe('Куёвбоши МФЙ');
+
+      // Verify DB accepted evidence record has canonical name
+      const [eviRow] = await db
+        .select()
+        .from(acceptedEvidence)
+        .where(
+          and(
+            eq(acceptedEvidence.districtId, testDistrictId),
+            eq(acceptedEvidence.telegramMessageId, messageId1),
+          ),
+        );
+      expect(eviRow?.mahallaName).toBe('Куёвбоши МФЙ');
+    }
+
+    // 3. Second incoming evidence with un-suffixed "Куёвбоши" from different chatId
+    // snaps via areMahallasEquivalent against the district registered group
+    const otherChatId = `-100${Date.now() + 1}${Math.floor(Math.random() * 1000)}`;
+    const intakeId2 = `int_${crypto.randomUUID()}`;
+    const messageId2 = `msg_${Date.now()}_2`;
+    await seedIntakeRecord({
+      intakeId: intakeId2,
+      messageId: messageId2,
+      timestamp: new Date(now.getTime() + 5000),
+      text: 'Сув ҳалиям келмади',
+      mahallaName: 'Куёвбоши',
+      calendarDay,
+      chatId: otherChatId,
+    });
+
+    aiController.mockAdapter.setNextResponse({
+      decision: 'MATCH_EXISTING_TOPIC',
+      matched_topic_id: firstTopicId,
+      primary_lane: null,
+      reasoning: 'Belongs to existing water outage topic in Куёвбоши МФЙ',
+    });
+
+    const outcome2 = await assignEvidenceToTopic(
+      {
+        db,
+        pool,
+        boss,
+        topicMatchingEvaluator: new TopicMatchingEvaluator(aiController.gateway),
+      },
+      {
+        intakeId: intakeId2,
+        districtId: testDistrictId,
+        mahallaName: 'Куёвбоши', // Different chatId, snaps via areMahallasEquivalent
+        calendarDay,
+        telegramChatId: otherChatId,
+        telegramMessageId: messageId2,
+        telegramUserId: 'user_789',
+        originalTimestamp: new Date(now.getTime() + 5000).toISOString(),
+        contentType: 'TEXT',
+        verbatimText: 'Сув ҳалиям келмади',
+        replyMetadata: null,
+        aiOperationId: `aiop_${crypto.randomUUID()}`,
+        relevantLanes: ['WATER'],
+        reasoning: 'Still no water',
+      },
+    );
+
+    expect(outcome2.status).toBe('ASSIGNED');
+    if (outcome2.status === 'ASSIGNED') {
+      expect(outcome2.mahallaName).toBe('Куёвбоши МФЙ');
+      // Should match existing topic rather than creating a new one
+      if (outcome1.status === 'ASSIGNED') {
+        expect(outcome2.topicId).toBe(outcome1.topicId);
+        expect(outcome2.isNewTopic).toBe(false);
+      }
+    }
   });
 });
