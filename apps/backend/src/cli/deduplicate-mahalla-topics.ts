@@ -1,6 +1,10 @@
 import type pg from 'pg';
 import type PgBoss from 'pg-boss';
-import { canonicalizeMahallaName, normalizeMahallaName } from '@mahalla-ovozi/api-contracts';
+import {
+  canonicalizeMahallaName,
+  normalizeMahallaName,
+  ensureOfficialMahallaSuffix,
+} from '@mahalla-ovozi/api-contracts';
 import { createDbPool, resolveDatabaseUrl, maskDatabaseUrl } from '../adapters/db/client.js';
 import {
   createBossClient,
@@ -97,7 +101,7 @@ Options:
 
 /**
  * Selects the primary topic from a cluster of duplicates:
- * 1. Prefer a topic whose mahallaName exactly equals canonicalizeMahallaName(mahallaName).
+ * 1. Prefer a topic whose mahallaName exactly equals ensureOfficialMahallaSuffix(canonicalizeMahallaName(mahallaName)).
  * 2. If multiple or none match, pick the topic with the earliest createdAt timestamp (tie-break by id).
  */
 export function selectPrimaryTopic(cluster: TopicRecord[]): TopicRecord {
@@ -105,11 +109,11 @@ export function selectPrimaryTopic(cluster: TopicRecord[]): TopicRecord {
     throw new Error('Cannot select primary topic from empty cluster');
   }
 
-  const canonicalMatches = cluster.filter(
-    (t) => t.mahallaName === canonicalizeMahallaName(t.mahallaName),
+  const officialMatches = cluster.filter(
+    (t) => t.mahallaName === ensureOfficialMahallaSuffix(canonicalizeMahallaName(t.mahallaName)),
   );
 
-  const candidates = canonicalMatches.length > 0 ? canonicalMatches : cluster;
+  const candidates = officialMatches.length > 0 ? officialMatches : cluster;
 
   return [...candidates].sort((a, b) => {
     const diff = a.createdAt.getTime() - b.createdAt.getTime();
@@ -169,20 +173,20 @@ export async function deduplicateMahallaTopics(
   summary.groupsScanned = groupRes.rows.length;
 
   for (const group of groupRes.rows) {
-    const canonical = canonicalizeMahallaName(group.mahallaName);
-    if (canonical !== group.mahallaName) {
+    const official = ensureOfficialMahallaSuffix(canonicalizeMahallaName(group.mahallaName));
+    if (official !== group.mahallaName) {
       // Check for collision with an existing group in the same district
       const collisionCheck = await pool.query(
         `SELECT id FROM district_telegram_groups
          WHERE district_id = $1 AND LOWER(mahalla_name) = LOWER($2) AND id != $3`,
-        [group.districtId, canonical, group.id],
+        [group.districtId, official, group.id],
       );
 
       if (collisionCheck.rows.length > 0) {
         summary.groupsCollided++;
         console.warn(
           `  ⚠️  [GROUP COLLISION SKIPPED] Group ${group.id} (district ${group.districtId}) ` +
-          `cannot be renamed to "${canonical}" because group ${collisionCheck.rows[0].id} ` +
+          `cannot be renamed to "${official}" because group ${collisionCheck.rows[0].id} ` +
           `already uses this mahalla name.`,
         );
         continue;
@@ -193,11 +197,11 @@ export async function deduplicateMahallaTopics(
           `UPDATE district_telegram_groups
            SET mahalla_name = $1, updated_at = NOW()
            WHERE id = $2`,
-          [canonical, group.id],
+          [official, group.id],
         );
-        console.log(`  ✅ [GROUP NORMALIZED] ${group.id}: "${group.mahallaName}" -> "${canonical}"`);
+        console.log(`  ✅ [GROUP NORMALIZED] ${group.id}: "${group.mahallaName}" -> "${official}"`);
       } else {
-        console.log(`  🔍 [DRY-RUN GROUP] Would normalize ${group.id}: "${group.mahallaName}" -> "${canonical}"`);
+        console.log(`  🔍 [DRY-RUN GROUP] Would normalize ${group.id}: "${group.mahallaName}" -> "${official}"`);
       }
       summary.groupsNormalized++;
     }
@@ -275,7 +279,7 @@ export async function deduplicateMahallaTopics(
         const primary = selectPrimaryTopic(clusterTopics);
         const duplicateTopics = clusterTopics.filter((t) => t.id !== primary.id);
         const duplicateIds = duplicateTopics.map((d) => d.id);
-        const canonicalName = canonicalizeMahallaName(primary.mahallaName);
+        const officialName = ensureOfficialMahallaSuffix(canonicalizeMahallaName(primary.mahallaName));
 
         // Fetch evidence counts for diagnostic logging
         const evidenceCountsRes = await pool.query<{ topicId: string; count: number }>(
@@ -297,7 +301,7 @@ export async function deduplicateMahallaTopics(
           0,
         );
 
-        console.log(`  📌 [DUPLICATE CLUSTER FOUND] "${canonicalName}"`);
+        console.log(`  📌 [DUPLICATE CLUSTER FOUND] "${officialName}"`);
         console.log(`     District: ${primary.districtId} | Lane: ${primary.primaryLane} | Day: ${primary.calendarDay}`);
         console.log(`     Primary:    ${primary.id} ("${primary.mahallaName}") [${primaryCount} evidence records]`);
         for (const dup of duplicateTopics) {
@@ -320,7 +324,7 @@ export async function deduplicateMahallaTopics(
                SET topic_id = $1, mahalla_name = $2
                WHERE topic_id = ANY($3::text[])
                RETURNING id`,
-              [primary.id, canonicalName, duplicateIds],
+              [primary.id, officialName, duplicateIds],
             );
             const movedEvidenceCount = moveRes.rowCount ?? 0;
             summary.evidenceRecordsMoved += movedEvidenceCount;
@@ -330,7 +334,7 @@ export async function deduplicateMahallaTopics(
               `UPDATE accepted_evidence
                SET mahalla_name = $1
                WHERE topic_id = $2 AND mahalla_name != $1`,
-              [canonicalName, primary.id],
+              [officialName, primary.id],
             );
 
             // 3. Compute latest evidence timestamp and evidence count on consolidated primary
@@ -361,7 +365,7 @@ export async function deduplicateMahallaTopics(
                    retention_expires_at = GREATEST(retention_expires_at, $4),
                    updated_at = NOW()
                WHERE id = $5`,
-              [canonicalName, newGeneration, latestTimestamp, maxRetentionExpiry, primary.id],
+              [officialName, newGeneration, latestTimestamp, maxRetentionExpiry, primary.id],
             );
 
             // 5. Update primary topic_projections mahalla_name if projection already exists
@@ -369,7 +373,7 @@ export async function deduplicateMahallaTopics(
               `UPDATE topic_projections
                SET mahalla_name = $1, updated_at = NOW()
                WHERE topic_id = $2`,
-              [canonicalName, primary.id],
+              [officialName, primary.id],
             );
 
             // 6. Delete duplicate topic projections
@@ -411,7 +415,7 @@ export async function deduplicateMahallaTopics(
                 const jobData: TelegramTopicProjectionJobData = {
                   topicId: primary.id,
                   districtId: primary.districtId,
-                  mahallaName: canonicalName,
+                  mahallaName: officialName,
                   calendarDay: primary.calendarDay,
                   generation: newGeneration,
                 };
@@ -436,7 +440,7 @@ export async function deduplicateMahallaTopics(
             }
           } catch (err) {
             await client.query('ROLLBACK');
-            console.error(`     ❌ Error consolidating cluster "${canonicalName}":`, err);
+            console.error(`     ❌ Error consolidating cluster "${officialName}":`, err);
             throw err;
           } finally {
             client.release();
@@ -444,27 +448,56 @@ export async function deduplicateMahallaTopics(
         }
         console.log('');
       } else if (clusterTopics.length === 1) {
-        // Single topic: check if its name needs canonical normalization
+        // Single topic: check if its name needs official "МФЙ" suffix
         const single = clusterTopics[0]!;
-        const canonical = canonicalizeMahallaName(single.mahallaName);
-        if (canonical !== single.mahallaName) {
+        const official = ensureOfficialMahallaSuffix(canonicalizeMahallaName(single.mahallaName));
+        if (official !== single.mahallaName) {
           summary.singleTopicsNormalized++;
           if (dryRun) {
-            console.log(`  🔍 [DRY-RUN SINGLE TOPIC] Would normalize topic ${single.id}: "${single.mahallaName}" -> "${canonical}"`);
+            console.log(`  🔍 [DRY-RUN SINGLE TOPIC] Would normalize topic ${single.id}: "${single.mahallaName}" -> "${official}"`);
           } else {
+            const newGeneration = (single.requiredDerivedGeneration ?? 0) + 1;
             await pool.query(
-              `UPDATE topics SET mahalla_name = $1, updated_at = NOW() WHERE id = $2`,
-              [canonical, single.id],
+              `UPDATE topics SET mahalla_name = $1, required_derived_generation = $2, updated_at = NOW() WHERE id = $3`,
+              [official, newGeneration, single.id],
             );
             await pool.query(
               `UPDATE accepted_evidence SET mahalla_name = $1 WHERE topic_id = $2`,
-              [canonical, single.id],
+              [official, single.id],
             );
             await pool.query(
               `UPDATE topic_projections SET mahalla_name = $1, updated_at = NOW() WHERE topic_id = $2`,
-              [canonical, single.id],
+              [official, single.id],
             );
-            console.log(`  ✅ [SINGLE TOPIC NORMALIZED] ${single.id}: "${single.mahallaName}" -> "${canonical}"`);
+            console.log(`  ✅ [SINGLE TOPIC NORMALIZED] ${single.id}: "${single.mahallaName}" -> "${official}" (generation bumped to ${newGeneration})`);
+
+            if (boss) {
+              try {
+                const singletonKey = JobSingletonKeys.forTopicProjection(single.id, newGeneration);
+                const jobData: TelegramTopicProjectionJobData = {
+                  topicId: single.id,
+                  districtId: single.districtId,
+                  mahallaName: official,
+                  calendarDay: single.calendarDay,
+                  generation: newGeneration,
+                };
+                const jobId = await boss.send(TELEGRAM_TOPIC_PROJECTION_QUEUE, jobData, {
+                  singletonKey,
+                  retryLimit: 5,
+                  retryDelay: 15,
+                  retryBackoff: true,
+                });
+                if (jobId) {
+                  summary.projectionJobsEnqueued++;
+                  console.log(`     📬 Enqueued projection recalculation job for single topic (jobId: ${jobId})`);
+                }
+              } catch (err: unknown) {
+                console.warn(
+                  `     ⚠️  Failed to enqueue pg-boss projection job for topic ${single.id}:`,
+                  err instanceof Error ? err.message : String(err),
+                );
+              }
+            }
           }
         }
       }

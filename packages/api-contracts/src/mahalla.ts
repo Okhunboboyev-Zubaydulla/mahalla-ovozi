@@ -58,3 +58,60 @@ export function normalizeMahallaName(name: string): string {
 export function areMahallasEquivalent(a: string, b: string): boolean {
   return normalizeMahallaName(a) === normalizeMahallaName(b);
 }
+
+/**
+ * Ensures a Mahalla name has the official Cyrillic "МФЙ" suffix.
+ * - If the trimmed input already ends with "МФЙ" (case-insensitive, Cyrillic or Latin MFY),
+ *   standardizes the suffix to " МФЙ".
+ * - If the trimmed input ends with administrative words like "маҳалласи", replaces with " МФЙ".
+ * - If the input is empty or whitespace-only, returns empty string.
+ * - Otherwise, appends " МФЙ" ensuring proper spacing.
+ */
+export function ensureOfficialMahallaSuffix(name: string): string {
+  if (typeof name !== 'string') {
+    return '';
+  }
+
+  const trimmed = name.trim();
+  if (trimmed.length === 0) {
+    return '';
+  }
+
+  // If the string is already just "МФЙ" or equivalent abbreviation
+  if (/^(?:м\.?\s*ф\.?\s*й\.?|m\.?\s*f\.?\s*y\.?)$/iu.test(trimmed)) {
+    return 'МФЙ';
+  }
+
+  // If it ends with administrative words (маҳалласи, mahallasi, etc.)
+  if (/(?:\s+)(?:маҳалласи|маҳалла|махалласи|махалла|mahallasi|mahalla)$/iu.test(trimmed)) {
+    const withoutAdminWord = trimmed
+      .replace(/(?:\s+)(?:маҳалласи|маҳалла|махалласи|махалла|mahallasi|mahalla)$/iu, '')
+      .trim();
+    if (withoutAdminWord.length > 0) {
+      return `${withoutAdminWord} МФЙ`;
+    }
+  }
+
+  // If it ends with any MFY abbreviation variant with preceding whitespace
+  const withoutTrailingMfy = trimmed
+    .replace(/(?:\s+)(?:м\.?\s*ф\.?\s*й\.?|m\.?\s*f\.?\s*y\.?)$/iu, '')
+    .trim();
+
+  if (withoutTrailingMfy !== trimmed && withoutTrailingMfy.length > 0) {
+    return `${withoutTrailingMfy} МФЙ`;
+  }
+
+  // Check if it already ends with " МФЙ" (exact Cyrillic)
+  if (trimmed.endsWith(' МФЙ')) {
+    return trimmed;
+  }
+
+  // Check if it ends with "МФЙ" attached without space or lowercase
+  if (/[\s_-]?мфй$/iu.test(trimmed)) {
+    const base = trimmed.replace(/[\s_-]?мфй$/iu, '').trim();
+    return base.length > 0 ? `${base} МФЙ` : 'МФЙ';
+  }
+
+  return `${trimmed} МФЙ`;
+}
+

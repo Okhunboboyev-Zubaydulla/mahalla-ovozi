@@ -7,6 +7,7 @@ import {
   UserbotClientPort,
   UserbotClientFactory,
   UserbotClientEvents,
+  UserbotChatMetadata,
   ClassifiedUserbotSignal,
   _AssertPassiveOnlyPort,
 } from '../../modules/userbot/userbot-client-port.js';
@@ -34,6 +35,8 @@ interface GramJsClientStub {
   connected?: boolean;
   addEventHandler?(callback: (update: unknown) => void, event: unknown): void;
   removeEventHandler?(callback: (update: unknown) => void, event: unknown): void;
+  getEntity?(entity: unknown): Promise<unknown>;
+  getDialogs?(options?: unknown): Promise<unknown[]>;
   updateManager?: {
     refreshFromState?(state: { pts?: number; qts?: number; date?: number; seq?: number }): void;
     state?: {
@@ -295,6 +298,100 @@ export class GramJsUserbotClient implements UserbotClientPort {
       return null;
     }
     return JSON.stringify(position);
+  }
+
+  async getChatMetadata(chatId: string): Promise<UserbotChatMetadata | null> {
+    if (!this.client || !this.isClientConnected) {
+      return null;
+    }
+
+    const tgClient = this.client;
+
+    // 1. Try getEntity(chatId)
+    if (typeof tgClient.getEntity === 'function') {
+      try {
+        let entity: unknown;
+        try {
+          entity = await tgClient.getEntity(chatId);
+        } catch {
+          if (/^-?\d+$/.test(chatId)) {
+            try {
+              entity = await tgClient.getEntity(BigInt(chatId));
+            } catch {
+              // fallback to getDialogs
+            }
+          }
+        }
+
+        if (entity && typeof entity === 'object') {
+          const ent = entity as Record<string, unknown>;
+          const title = typeof ent.title === 'string' ? ent.title : undefined;
+          if (title && title.trim().length > 0) {
+            const username = typeof ent.username === 'string' ? ent.username : null;
+            const isGroup = ent.broadcast !== true;
+            return {
+              chatId,
+              chatTitle: title.trim(),
+              chatUsername: username,
+              isGroup,
+            };
+          }
+        }
+      } catch (err: unknown) {
+        logger.debug(
+          { districtId: this.districtId, chatId, err },
+          'getEntity failed or entity not cached in GramJS; attempting getDialogs fallback',
+        );
+      }
+    }
+
+    // 2. If uncached/fails, call getDialogs({}) to populate cache and inspect dialogs
+    if (typeof tgClient.getDialogs === 'function') {
+      try {
+        const dialogs = await tgClient.getDialogs({});
+        if (Array.isArray(dialogs)) {
+          for (const d of dialogs) {
+            const dialog = d as Record<string, unknown>;
+            const ent =
+              dialog.entity && typeof dialog.entity === 'object'
+                ? (dialog.entity as Record<string, unknown>)
+                : undefined;
+            const rawId = dialog.id ?? ent?.id;
+            const dId = String(rawId ?? '');
+            if (
+              dId === chatId ||
+              `-100${dId}` === chatId ||
+              `-${dId}` === chatId ||
+              chatId === `-100${dId}` ||
+              chatId === `-${dId}`
+            ) {
+              const title =
+                (typeof dialog.title === 'string' && dialog.title) ||
+                (typeof dialog.name === 'string' && dialog.name) ||
+                (typeof ent?.title === 'string' && ent.title);
+
+              if (title && title.trim().length > 0) {
+                const username = typeof ent?.username === 'string' ? ent.username : null;
+                const isGroup = dialog.isGroup === true || ent?.broadcast !== true;
+                return {
+                  chatId,
+                  chatTitle: title.trim(),
+                  chatUsername: username,
+                  isGroup,
+                };
+              }
+            }
+          }
+        }
+      } catch (err: unknown) {
+        logger.warn(
+          { districtId: this.districtId, chatId, err },
+          'Failed to inspect dialogs in GramJS getChatMetadata',
+        );
+      }
+    }
+
+    return null;
   }
 
   /**

@@ -88,12 +88,12 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
   });
 
   describe('Primary Topic Selection Logic', () => {
-    it('prefers the topic whose name is already canonical', () => {
+    it('prefers the topic whose name already has the official suffix', () => {
       const cluster: TopicRecord[] = [
         {
-          id: 'top_non_canonical',
+          id: 'top_without_suffix',
           districtId: 'dist_1',
-          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
+          mahallaName: 'Раваллик ва Яккақайроғоч',
           calendarDay: '2026-10-15',
           primaryLane: 'ELECTRICITY',
           status: 'ACTIVE',
@@ -105,9 +105,9 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
           updatedAt: new Date('2026-10-15T09:00:00Z'),
         },
         {
-          id: 'top_canonical',
+          id: 'top_official',
           districtId: 'dist_1',
-          mahallaName: 'Раваллик ва Яккақайроғоч',
+          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
           calendarDay: '2026-10-15',
           primaryLane: 'ELECTRICITY',
           status: 'ACTIVE',
@@ -121,11 +121,11 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       ];
 
       const primary = selectPrimaryTopic(cluster);
-      expect(primary.id).toBe('top_canonical');
-      expect(primary.mahallaName).toBe('Раваллик ва Яккақайроғоч');
+      expect(primary.id).toBe('top_official');
+      expect(primary.mahallaName).toBe('Раваллик ва Яккақайроғоч МФЙ');
     });
 
-    it('falls back to earliest createdAt if neither or both are canonical', () => {
+    it('falls back to earliest createdAt if neither or both have the official suffix', () => {
       const cluster: TopicRecord[] = [
         {
           id: 'top_older',
@@ -144,7 +144,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
         {
           id: 'top_newer',
           districtId: 'dist_1',
-          mahallaName: 'Раваллик ва Яккақайроғоч маҳалласи',
+          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
           calendarDay: '2026-10-15',
           primaryLane: 'ELECTRICITY',
           status: 'ACTIVE',
@@ -167,12 +167,12 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       const calendarDay = '2026-10-15';
       const now = new Date();
 
-      // 1. Group with non-canonical name
+      // 1. Group with non-official name
       const groupId = `dtg_${crypto.randomUUID()}`;
       await db.insert(districtTelegramGroups).values({
         id: groupId,
         districtId: testDistrictId,
-        mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
+        mahallaName: 'Раваллик ва Яккақайроғоч',
         telegramChatId: `-100${Math.floor(100000000 + Math.random() * 900000000)}`,
         telegramChatTitle: 'Ravallik Chat',
         status: 'VALID',
@@ -187,7 +187,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
         {
           id: primaryTopicId,
           districtId: testDistrictId,
-          mahallaName: 'Раваллик ва Яккақайроғоч', // Canonical
+          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
           calendarDay,
           primaryLane: 'ELECTRICITY',
           status: 'ACTIVE',
@@ -200,7 +200,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
         {
           id: duplicateTopicId,
           districtId: testDistrictId,
-          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ', // Duplicate non-canonical
+          mahallaName: 'Раваллик ва Яккақайроғоч',
           calendarDay,
           primaryLane: 'ELECTRICITY',
           status: 'ACTIVE',
@@ -234,7 +234,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
           id: evi1Id,
           topicId: primaryTopicId,
           districtId: testDistrictId,
-          mahallaName: 'Раваллик ва Яккақайроғоч',
+          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
           calendarDay,
           intakeRecordId: intakeId,
           telegramChatId: '-100999999',
@@ -247,7 +247,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
           id: evi2Id,
           topicId: duplicateTopicId,
           districtId: testDistrictId,
-          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
+          mahallaName: 'Раваллик ва Яккақайроғоч',
           calendarDay,
           intakeRecordId: intakeId,
           telegramChatId: '-100999999',
@@ -273,7 +273,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
 
       // Verify DB was NOT mutated
       const groupCheck = await db.select().from(districtTelegramGroups).where(eq(districtTelegramGroups.id, groupId));
-      expect(groupCheck[0]!.mahallaName).toBe('Раваллик ва Яккақайроғоч МФЙ');
+      expect(groupCheck[0]!.mahallaName).toBe('Раваллик ва Яккақайроғоч');
 
       const dupTopicCheck = await db.select().from(topics).where(eq(topics.id, duplicateTopicId));
       expect(dupTopicCheck.length).toBe(1);
@@ -291,7 +291,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       await db.insert(districtTelegramGroups).values({
         id: groupId,
         districtId: testDistrictId,
-        mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
+        mahallaName: 'Раваллик ва Яккақайроғоч',
         telegramChatId: `-100${Math.floor(100000000 + Math.random() * 900000000)}`,
         telegramChatTitle: 'Ravallik Chat',
         status: 'VALID',
@@ -306,7 +306,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
         {
           id: primaryTopicId,
           districtId: testDistrictId,
-          mahallaName: 'Раваллик ва Яккақайроғоч',
+          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
           calendarDay,
           primaryLane: 'ELECTRICITY',
           status: 'ACTIVE',
@@ -319,7 +319,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
         {
           id: duplicateTopicId,
           districtId: testDistrictId,
-          mahallaName: 'Раваллик ва Яккақайроғоч МФЙ',
+          mahallaName: 'Раваллик ва Яккақайроғоч',
           calendarDay,
           primaryLane: 'ELECTRICITY',
           status: 'ACTIVE',
@@ -426,9 +426,9 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       expect(summary.projectionsDeleted).toBe(1);
 
       // Verify DB mutations:
-      // 1. Group was renamed to canonical
+      // 1. Group was renamed to official suffix
       const groupAfter = await db.select().from(districtTelegramGroups).where(eq(districtTelegramGroups.id, groupId));
-      expect(groupAfter[0]!.mahallaName).toBe('Раваллик ва Яккақайроғоч');
+      expect(groupAfter[0]!.mahallaName).toBe('Раваллик ва Яккақайроғоч МФЙ');
 
       // 2. Duplicate topic was deleted
       const dupAfter = await db.select().from(topics).where(eq(topics.id, duplicateTopicId));
@@ -438,13 +438,13 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       const projAfter = await db.select().from(topicProjections).where(eq(topicProjections.id, projDupId));
       expect(projAfter.length).toBe(0);
 
-      // 4. Primary topic survived with updated generation and canonical name
+      // 4. Primary topic survived with updated generation and official name
       const primaryAfter = await db.select().from(topics).where(eq(topics.id, primaryTopicId));
       expect(primaryAfter.length).toBe(1);
-      expect(primaryAfter[0]!.mahallaName).toBe('Раваллик ва Яккақайроғоч');
+      expect(primaryAfter[0]!.mahallaName).toBe('Раваллик ва Яккақайроғоч МФЙ');
       expect(primaryAfter[0]!.requiredDerivedGeneration).toBe(2);
 
-      // 5. All evidence records now point to primary topic and have canonical name
+      // 5. All evidence records now point to primary topic and have official name
       const allEvidence = await db
         .select()
         .from(acceptedEvidence)
@@ -452,7 +452,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       expect(allEvidence.length).toBe(3);
       for (const evi of allEvidence) {
         expect(evi.topicId).toBe(primaryTopicId);
-        expect(evi.mahallaName).toBe('Раваллик ва Яккақайроғоч');
+        expect(evi.mahallaName).toBe('Раваллик ва Яккақайроғоч МФЙ');
       }
 
       // Idempotency check: running again finds 0 duplicates
@@ -474,7 +474,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       await db.insert(topics).values({
         id: singleTopicId,
         districtId: testDistrictId,
-        mahallaName: 'Равотликлар МФЙ',
+        mahallaName: 'Равотликлар',
         calendarDay,
         primaryLane: 'GAS',
         status: 'ACTIVE',
@@ -489,7 +489,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       await db.insert(telegramIntakeRecords).values({
         id: intakeId,
         districtId: testDistrictId,
-        mahallaName: 'Равотликлар МФЙ',
+        mahallaName: 'Равотликлар',
         source: 'USERBOT',
         telegramChatId: '-100777777',
         telegramMessageId: '301',
@@ -504,7 +504,7 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
         id: eviId,
         topicId: singleTopicId,
         districtId: testDistrictId,
-        mahallaName: 'Равотликлар МФЙ',
+        mahallaName: 'Равотликлар',
         calendarDay,
         intakeRecordId: intakeId,
         telegramChatId: '-100777777',
@@ -523,10 +523,11 @@ describe('Mahalla Topics & Telegram Groups Deduplication CLI', () => {
       expect(summary.singleTopicsNormalized).toBe(1);
 
       const topicCheck = await db.select().from(topics).where(eq(topics.id, singleTopicId));
-      expect(topicCheck[0]!.mahallaName).toBe('Равотликлар');
+      expect(topicCheck[0]!.mahallaName).toBe('Равотликлар МФЙ');
+      expect(topicCheck[0]!.requiredDerivedGeneration).toBe(2);
 
       const eviCheck = await db.select().from(acceptedEvidence).where(eq(acceptedEvidence.id, eviId));
-      expect(eviCheck[0]!.mahallaName).toBe('Равотликлар');
+      expect(eviCheck[0]!.mahallaName).toBe('Равотликлар МФЙ');
     });
   });
 });

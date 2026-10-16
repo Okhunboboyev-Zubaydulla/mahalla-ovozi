@@ -105,6 +105,13 @@ export interface UserbotClientEvents {
 
 export type UserbotClientEvent = keyof UserbotClientEvents;
 
+export interface UserbotChatMetadata {
+  chatId: string;
+  chatTitle: string;
+  chatUsername: string | null;
+  isGroup: boolean;
+}
+
 export interface UserbotClientPort {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
@@ -112,6 +119,7 @@ export interface UserbotClientPort {
   on<E extends keyof UserbotClientEvents>(event: E, listener: UserbotClientEvents[E]): void;
   off?<E extends keyof UserbotClientEvents>(event: E, listener: UserbotClientEvents[E]): void;
   getUpdatePosition?(): string | null;
+  getChatMetadata?(chatId: string): Promise<UserbotChatMetadata | null>;
 }
 
 // Compile-time guard ensuring UserbotClientPort does not define any write methods

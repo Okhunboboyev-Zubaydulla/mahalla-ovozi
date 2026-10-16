@@ -165,7 +165,6 @@ export function TelegramGroupDrawer({
             { required: true, message: 'Илтимос, маҳалла номини киритинг.' },
             { max: 100, message: 'Маҳалла номи 100 та белгидан ошмаслиги керак.' },
           ]}
-          extra="«МФЙ» ёки «маҳалласи» қўшимчалари автоматик тарзда олиб ташланади."
         >
           <Input
             placeholder="Масалан: Навбаҳор"

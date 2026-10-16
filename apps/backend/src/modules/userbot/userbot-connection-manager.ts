@@ -12,6 +12,7 @@ import { eq, and, or, sql, asc } from 'drizzle-orm';
 import type { DbClient } from '../../adapters/db/client.js';
 import {
   districtTelegramUserbotSessions,
+  districtTelegramGroups,
   districts,
   operationalIssues,
 } from '../../adapters/db/schema/index.js';
@@ -532,6 +533,57 @@ export class UserbotConnectionManager {
             updatedAt: now,
           })
           .where(eq(districtTelegramUserbotSessions.districtId, districtId));
+
+        // Reconcile live group titles/usernames for USERBOT groups in this district
+        if (typeof client.getChatMetadata === 'function') {
+          try {
+            const userbotGroups = await this.db
+              .select({
+                id: districtTelegramGroups.id,
+                telegramChatId: districtTelegramGroups.telegramChatId,
+              })
+              .from(districtTelegramGroups)
+              .where(
+                and(
+                  eq(districtTelegramGroups.districtId, districtId),
+                  eq(districtTelegramGroups.transport, 'USERBOT'),
+                ),
+              );
+
+            for (const group of userbotGroups) {
+              try {
+                const meta = await client.getChatMetadata(group.telegramChatId);
+                if (meta && meta.chatTitle) {
+                  const validatedAt = new Date();
+                  await this.db
+                    .update(districtTelegramGroups)
+                    .set({
+                      telegramChatTitle: meta.chatTitle,
+                      telegramChatUsername: meta.chatUsername,
+                      lastValidatedAt: validatedAt,
+                      updatedAt: validatedAt,
+                    })
+                    .where(eq(districtTelegramGroups.id, group.id));
+
+                  logger.info(
+                    { districtId, groupId: group.id, chatTitle: meta.chatTitle },
+                    'Reconciled userbot group metadata on connect',
+                  );
+                }
+              } catch (metaErr: unknown) {
+                logger.warn(
+                  { districtId, groupId: group.id, chatId: group.telegramChatId, err: metaErr },
+                  'Failed to reconcile userbot group metadata',
+                );
+              }
+            }
+          } catch (reconcileErr: unknown) {
+            logger.warn(
+              { districtId, err: reconcileErr },
+              'Error querying district groups for userbot metadata reconciliation',
+            );
+          }
+        }
       } catch (err: unknown) {
         const signal = classifyTelegramSignal(err);
         await this.handleSignal(districtId, signal, { isConnected: false });

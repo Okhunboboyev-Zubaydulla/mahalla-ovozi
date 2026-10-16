@@ -3,6 +3,7 @@ import {
   canonicalizeMahallaName,
   normalizeMahallaName,
   areMahallasEquivalent,
+  ensureOfficialMahallaSuffix,
 } from '../src/mahalla.js';
 
 describe('Mahalla Normalization & Equivalence Contracts', () => {
@@ -119,4 +120,42 @@ describe('Mahalla Normalization & Equivalence Contracts', () => {
       expect(areMahallasEquivalent('Равотликлар', 'Раваллик')).toBe(false);
     });
   });
+
+  describe('ensureOfficialMahallaSuffix', () => {
+    it('appends official Cyrillic "МФЙ" when suffix is absent', () => {
+      expect(ensureOfficialMahallaSuffix('Раваллик ва Яккақайроғоч')).toBe(
+        'Раваллик ва Яккақайроғоч МФЙ'
+      );
+      expect(ensureOfficialMahallaSuffix('Равотликлар')).toBe('Равотликлар МФЙ');
+      expect(ensureOfficialMahallaSuffix('Navbahor')).toBe('Navbahor МФЙ');
+    });
+
+    it('preserves existing official Cyrillic "МФЙ"', () => {
+      expect(ensureOfficialMahallaSuffix('Раваллик ва Яккақайроғоч МФЙ')).toBe(
+        'Раваллик ва Яккақайроғоч МФЙ'
+      );
+      expect(ensureOfficialMahallaSuffix('Равотликлар МФЙ')).toBe('Равотликлар МФЙ');
+    });
+
+    it('normalizes lowercase or non-standard MFY variants to "МФЙ"', () => {
+      expect(ensureOfficialMahallaSuffix('Равотликлар мфй')).toBe('Равотликлар МФЙ');
+      expect(ensureOfficialMahallaSuffix('Равотликлар м.ф.й.')).toBe('Равотликлар МФЙ');
+      expect(ensureOfficialMahallaSuffix('Равотликлар М.Ф.Й.')).toBe('Равотликлар МФЙ');
+      expect(ensureOfficialMahallaSuffix('Navbahor MFY')).toBe('Navbahor МФЙ');
+      expect(ensureOfficialMahallaSuffix('Navbahor m.f.y.')).toBe('Navbahor МФЙ');
+    });
+
+    it('replaces administrative words like "маҳалласи" with "МФЙ"', () => {
+      expect(ensureOfficialMahallaSuffix('Истиқлол маҳалласи')).toBe('Истиқлол МФЙ');
+      expect(ensureOfficialMahallaSuffix('Navbahor mahallasi')).toBe('Navbahor МФЙ');
+    });
+
+    it('handles standalone "МФЙ" and empty inputs', () => {
+      expect(ensureOfficialMahallaSuffix('МФЙ')).toBe('МФЙ');
+      expect(ensureOfficialMahallaSuffix('м.ф.й.')).toBe('МФЙ');
+      expect(ensureOfficialMahallaSuffix('')).toBe('');
+      expect(ensureOfficialMahallaSuffix('   ')).toBe('');
+    });
+  });
 });
+

@@ -16,7 +16,7 @@ import {
   TelegramGroupAuditAction,
   CreateTelegramGroupRequest,
   UpdateTelegramGroupRequest,
-  canonicalizeMahallaName,
+  areMahallasEquivalent,
 } from '@mahalla-ovozi/api-contracts';
 import { decryptToken } from '../../adapters/crypto/token-cipher.js';
 import {
@@ -219,10 +219,10 @@ export async function createDistrictTelegramGroup(
   }
 
   const trimmedChatId = input.telegramChatId.trim();
-  const canonicalMahalla = canonicalizeMahallaName(input.mahallaName);
+  const mahallaName = input.mahallaName.trim();
   const transport: GroupTransport = input.transport ?? 'BOT_API';
 
-  let chatTitle = canonicalMahalla;
+  let chatTitle = mahallaName;
   let chatUsername: string | null = null;
   let isPrivacyDisabled = false;
   let botMembershipStatus: string | null = null;
@@ -279,11 +279,11 @@ export async function createDistrictTelegramGroup(
         .where(eq(districtTelegramGroups.districtId, districtId));
 
       const existingMahalla = existingDistrictGroups.find(
-        (g) => canonicalizeMahallaName(g.mahallaName).toLowerCase() === canonicalMahalla.toLowerCase(),
+        (g) => areMahallasEquivalent(g.mahallaName, mahallaName),
       );
 
       if (existingMahalla) {
-        throw new MahallaNameAlreadyExistsError(canonicalMahalla);
+        throw new MahallaNameAlreadyExistsError(mahallaName);
       }
 
       const [existingChat] = await tx
@@ -305,7 +305,7 @@ export async function createDistrictTelegramGroup(
         .values({
           id: groupId,
           districtId,
-          mahallaName: canonicalMahalla,
+          mahallaName,
           telegramChatId: trimmedChatId,
           telegramChatTitle: chatTitle,
           telegramChatUsername: chatUsername,
@@ -329,7 +329,7 @@ export async function createDistrictTelegramGroup(
         metadata: {
           districtId,
           groupId,
-          mahallaName: canonicalMahalla,
+          mahallaName,
           telegramChatId: trimmedChatId,
           telegramChatTitle: chatTitle,
           transport,
@@ -348,8 +348,8 @@ export async function createDistrictTelegramGroup(
     }
 
     mapPostgresConstraintError(err, {
-      district_telegram_groups_district_mahalla_lower_idx: () => new MahallaNameAlreadyExistsError(canonicalMahalla),
-      mahalla_name: () => new MahallaNameAlreadyExistsError(canonicalMahalla),
+      district_telegram_groups_district_mahalla_lower_idx: () => new MahallaNameAlreadyExistsError(mahallaName),
+      mahalla_name: () => new MahallaNameAlreadyExistsError(mahallaName),
       district_telegram_groups_chat_id_idx: () => new GroupAlreadyAssignedError(trimmedChatId),
       telegram_chat_id: () => new GroupAlreadyAssignedError(trimmedChatId),
     });
@@ -387,11 +387,11 @@ export async function updateDistrictTelegramGroup(
     throw new TelegramGroupNotFoundError(groupId);
   }
 
-  const newMahallaName = input.mahallaName ? canonicalizeMahallaName(input.mahallaName) : group.mahallaName;
+  const newMahallaName = input.mahallaName ? input.mahallaName.trim() : group.mahallaName;
   const newChatId = input.telegramChatId ? input.telegramChatId.trim() : group.telegramChatId;
   const newTransport = input.transport !== undefined ? input.transport : group.transport;
   const isChatChanged = newChatId !== group.telegramChatId;
-  const isMahallaChanged = newMahallaName.toLowerCase() !== group.mahallaName.toLowerCase();
+  const isMahallaChanged = newMahallaName !== group.mahallaName;
   const isTransportChanged = newTransport !== group.transport;
 
   if (
@@ -469,7 +469,7 @@ export async function updateDistrictTelegramGroup(
 
   try {
     await db.transaction(async (tx) => {
-      if (newMahallaName.toLowerCase() !== group.mahallaName.toLowerCase()) {
+      if (isMahallaChanged) {
         const existingDistrictGroups = await tx
           .select({ id: districtTelegramGroups.id, mahallaName: districtTelegramGroups.mahallaName })
           .from(districtTelegramGroups)
@@ -478,7 +478,7 @@ export async function updateDistrictTelegramGroup(
         const existingMahalla = existingDistrictGroups.find(
           (g) =>
             g.id !== groupId &&
-            canonicalizeMahallaName(g.mahallaName).toLowerCase() === newMahallaName.toLowerCase(),
+            areMahallasEquivalent(g.mahallaName, newMahallaName),
         );
 
         if (existingMahalla) {
