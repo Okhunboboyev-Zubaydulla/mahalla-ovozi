@@ -21,7 +21,7 @@ import {
 import { qualifyTelegramContent } from './telegram-content-qualification.js';
 import { SLIDING_DEBOUNCE_WINDOW_SECONDS } from './jobs/burst-debounce-job-handler.js';
 import { getTashkentCalendarDay } from './timezone-util.js';
-import { type GroupTransport, canonicalizeMahallaName } from '@mahalla-ovozi/api-contracts';
+import { type GroupTransport } from '@mahalla-ovozi/api-contracts';
 
 import type { TelegramUpdate, TelegramMessage } from '../../adapters/telegram/telegram-types.js';
 import {
@@ -267,7 +267,7 @@ async function resolveTransportAuthorizationCandidate(
     return {
       authorized: true,
       districtId: resolvedDistrictId,
-      mahallaName: canonicalizeMahallaName(record.mahallaName),
+      mahallaName: record.mahallaName,
       botId: target.botId,
       groupId: record.groupId,
       transport: 'BOT_API',
@@ -341,7 +341,7 @@ async function resolveTransportAuthorizationCandidate(
   return {
     authorized: true,
     districtId: record.districtId,
-    mahallaName: canonicalizeMahallaName(record.mahallaName),
+    mahallaName: record.mahallaName,
     botId: null,
     groupId: record.groupId,
     transport: 'USERBOT',
@@ -571,7 +571,7 @@ export async function ingestTelegramMessage(
 ): Promise<IngestTelegramMessageResult> {
   const { tx, enqueueJob } = scope;
   const safeRawPayload = sanitizeRawUpdatePayload(payload.rawPayload);
-  const canonicalMahalla = canonicalizeMahallaName(auth.mahallaName);
+  const mahallaName = auth.mahallaName;
 
   // Edited message detection:
   // If isEdit: check existing record for (district_id, telegram_chat_id, telegram_message_id)
@@ -625,7 +625,7 @@ export async function ingestTelegramMessage(
           TELEGRAM_BURST_DEBOUNCE_QUEUE,
           {
             districtId: auth.districtId,
-            mahallaName: canonicalMahalla,
+            mahallaName,
             calendarDay: existing.calendarDay,
             telegramChatId: payload.chatId,
             telegramUserId: payload.userId,
@@ -648,7 +648,7 @@ export async function ingestTelegramMessage(
         intakeId: existing.id,
         jobId,
         districtId: auth.districtId,
-        mahallaName: canonicalMahalla,
+        mahallaName,
         chatId: payload.chatId,
         messageId: payload.messageId,
       };
@@ -663,7 +663,7 @@ export async function ingestTelegramMessage(
     .values({
       id: intakeId,
       districtId: auth.districtId,
-      mahallaName: canonicalMahalla,
+      mahallaName,
       source: auth.transport,
       telegramBotId: auth.botId,
       telegramChatId: payload.chatId,
@@ -718,7 +718,7 @@ export async function ingestTelegramMessage(
   const qualResult = qualifyTelegramContent({
     id: record.id,
     districtId: auth.districtId,
-    mahallaName: canonicalMahalla,
+    mahallaName,
     calendarDay: record.calendarDay,
     source: auth.transport,
     telegramBotId: auth.botId,
@@ -742,7 +742,7 @@ export async function ingestTelegramMessage(
       TELEGRAM_BURST_DEBOUNCE_QUEUE,
       {
         districtId: auth.districtId,
-        mahallaName: canonicalMahalla,
+        mahallaName,
         calendarDay: record.calendarDay,
         telegramChatId: record.telegramChatId,
         telegramUserId: record.telegramUserId,
@@ -770,7 +770,7 @@ export async function ingestTelegramMessage(
       {
         intakeId: record.id,
         districtId: auth.districtId,
-        mahallaName: canonicalMahalla,
+        mahallaName,
         calendarDay: record.calendarDay,
         telegramChatId: record.telegramChatId,
         telegramMessageId: record.telegramMessageId,
@@ -790,7 +790,7 @@ export async function ingestTelegramMessage(
     intakeId: record.id,
     jobId,
     districtId: auth.districtId,
-    mahallaName: canonicalMahalla,
+    mahallaName,
     chatId: payload.chatId,
     messageId: payload.messageId,
   };

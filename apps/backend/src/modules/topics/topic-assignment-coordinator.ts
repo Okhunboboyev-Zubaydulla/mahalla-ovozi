@@ -19,7 +19,6 @@ import {
   type TelegramTopicProjectionJobData,
 } from '../../adapters/jobs/boss-client.js';
 import { insertAiProviderAttempts } from '../ai/ai-operation-repository.js';
-import { canonicalizeMahallaName } from '@mahalla-ovozi/api-contracts';
 import {
   TopicMatchingEvaluator,
   findDirectReplyTopic,
@@ -164,7 +163,7 @@ export async function assignEvidenceToTopic(
     reasoning,
     burstMessages,
   } = input;
-  const mahallaName = canonicalizeMahallaName(input.mahallaName);
+  const mahallaName = input.mahallaName;
   let { verbatimText } = input;
 
   try {
