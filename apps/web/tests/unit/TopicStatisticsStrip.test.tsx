@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import React from 'react';
 import { ConfigProvider } from 'antd';
 import { mahallaTheme } from '../../src/theme/antd-theme.js';
@@ -262,13 +262,15 @@ describe('TopicStatisticsStrip Component Tests', () => {
 
     renderWithProviders(<TopicStatisticsStrip statistics={tie3Stats} />);
 
-    // Card 4: generic tie count header
-    expect(screen.getByText('Тенг: 3 та йўналиш')).toBeTruthy();
-    expect(screen.getByText('5 тадан мавзу')).toBeTruthy();
+    // Card 4: generic tie count header with cycling item and step badge
+    expect(screen.getByText('Тенг: 3 та соҳа (5 тадан)')).toBeTruthy();
+    expect(screen.getByText('Сув')).toBeTruthy();
+    expect(screen.getByText('1/3')).toBeTruthy();
 
-    // Card 5: generic tie count header
-    expect(screen.getByText('Тенг: 4 та маҳалла')).toBeTruthy();
-    expect(screen.getByText('4 тадан мавзу')).toBeTruthy();
+    // Card 5: generic tie count header with cycling item and step badge
+    expect(screen.getByText('Тенг: 4 та маҳалла (4 тадан)')).toBeTruthy();
+    expect(screen.getByText('Наврўз')).toBeTruthy();
+    expect(screen.getByText('1/4')).toBeTruthy();
 
     // Triggers exist for both 3+ ties
     const triggers = screen.getAllByTestId('statistic-card-popover-trigger');
@@ -281,7 +283,7 @@ describe('TopicStatisticsStrip Component Tests', () => {
     const popoverSubtitles = screen.getAllByText('5 тадан мавзу');
     expect(popoverSubtitles.length).toBeGreaterThanOrEqual(1);
     // Localized items in Card 4 popover
-    expect(screen.getByText('Сув')).toBeTruthy();
+    expect(screen.getAllByText('Сув').length).toBe(2);
     expect(screen.getByText('Электр')).toBeTruthy();
     expect(screen.getByText('Газ')).toBeTruthy();
 
@@ -290,10 +292,94 @@ describe('TopicStatisticsStrip Component Tests', () => {
     expect(screen.getByText('Тенг кўрсаткичли маҳаллалар')).toBeTruthy();
     const mahallaSubtitles = screen.getAllByText('4 тадан мавзу');
     expect(mahallaSubtitles.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Наврўз')).toBeTruthy();
+    expect(screen.getAllByText('Наврўз').length).toBe(2);
     expect(screen.getByText('Бўстон')).toBeTruthy();
     expect(screen.getByText('Олмазор')).toBeTruthy();
     expect(screen.getByText('Шодилик')).toBeTruthy();
+  });
+
+  it('auto-cycles tied items with 3500ms interval and pauses on hover/touch (Solution A auto-cycling ticker)', () => {
+    vi.useFakeTimers();
+    try {
+      const tieStats: HokimTopicStatisticsResponse = {
+        ...mockDefaultStats,
+        card4: {
+          mode: 'most_active_service_lane',
+          leaderLane: null,
+          leaderTopicCount: 5,
+          isTie: true,
+          tiedCount: 3,
+          tiedLanes: ['WATER', 'ELECTRICITY', 'GAS'],
+          isZero: false,
+        },
+      };
+
+      renderWithProviders(<TopicStatisticsStrip statistics={tieStats} />);
+
+      // Initially item 1: Сув (1/3)
+      expect(screen.getByText('Сув')).toBeTruthy();
+      expect(screen.getByText('1/3')).toBeTruthy();
+
+      // Advance by 3500ms -> item 2: Электр (2/3)
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.getByText('Электр')).toBeTruthy();
+      expect(screen.getByText('2/3')).toBeTruthy();
+
+      // Advance by 3500ms -> item 3: Газ (3/3)
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.getByText('Газ')).toBeTruthy();
+      expect(screen.getByText('3/3')).toBeTruthy();
+
+      // Advance by 3500ms -> wrap back to item 1: Сув (1/3)
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.getByText('Сув')).toBeTruthy();
+      expect(screen.getByText('1/3')).toBeTruthy();
+
+      // Test hover pausing
+      const card4El = document.getElementById('statistic-card-4')!;
+      fireEvent.mouseEnter(card4El);
+
+      // Advance timer while paused
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      // Should still be Сув (1/3) because it's paused!
+      expect(screen.getByText('Сув')).toBeTruthy();
+      expect(screen.getByText('1/3')).toBeTruthy();
+
+      // Mouse leave -> resumes
+      fireEvent.mouseLeave(card4El);
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.getByText('Электр')).toBeTruthy();
+      expect(screen.getByText('2/3')).toBeTruthy();
+
+      // Test touch pausing
+      fireEvent.touchStart(card4El);
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      // Should still be Электр (2/3) because it's paused!
+      expect(screen.getByText('Электр')).toBeTruthy();
+      expect(screen.getByText('2/3')).toBeTruthy();
+
+      // Touch end -> resumes
+      fireEvent.touchEnd(card4El);
+      act(() => {
+        vi.advanceTimersByTime(3500);
+      });
+      expect(screen.getByText('Газ')).toBeTruthy();
+      expect(screen.getByText('3/3')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders all-zero state with zero-precedence on Card 4 and Card 5 (AC 12)', () => {

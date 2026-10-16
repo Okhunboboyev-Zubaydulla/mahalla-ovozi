@@ -34,6 +34,7 @@ interface CardDescriptor {
     subtitle?: string;
     items: string[];
   };
+  cyclingItems?: string[];
 }
 
 export interface TopicStatisticsStripProps {
@@ -105,6 +106,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
   let card4Value: string | number = '—';
   let card4Subtitle = 'мавзулар йўқ';
   let card4Popover: { title: string; subtitle?: string; items: string[] } | undefined;
+  let card4CyclingItems: string[] | undefined;
 
   if (statistics?.card4) {
     if (statistics.card4.mode === 'multi_lane_topics') {
@@ -125,12 +127,14 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
           card4Value = `${name0} • ${name1}`;
           card4Subtitle = `${statistics.card4.leaderTopicCount} тадан мавзу`;
         } else if (tiedLanes.length > 2) {
-          card4Value = `Тенг: ${statistics.card4.tiedCount} та йўналиш`;
-          card4Subtitle = `${statistics.card4.leaderTopicCount} тадан мавзу`;
+          const localizedLanes = tiedLanes.map((lane) => LANE_LABELS[lane] ?? lane);
+          card4Value = localizedLanes[0] ?? `Тенг: ${statistics.card4.tiedCount} та соҳа`;
+          card4Subtitle = `Тенг: ${statistics.card4.tiedCount} та соҳа (${statistics.card4.leaderTopicCount} тадан)`;
+          card4CyclingItems = localizedLanes;
           card4Popover = {
             title: 'Тенг кўрсаткичли соҳалар',
             subtitle: `${statistics.card4.leaderTopicCount} тадан мавзу`,
-            items: tiedLanes.map((lane) => LANE_LABELS[lane] ?? lane),
+            items: localizedLanes,
           };
         } else {
           card4Value = `Тенг: ${statistics.card4.tiedCount} та йўналиш`;
@@ -152,6 +156,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
     iconBgColor: '#F3E8FF',
     iconColor: '#7C3AED',
     popover: card4Popover,
+    cyclingItems: card4CyclingItems,
   };
 
   // Card 5: Most active Mahalla or multi-evidence fallback
@@ -159,6 +164,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
   let card5Value: string | number = '—';
   let card5Subtitle = 'мавзулар йўқ';
   let card5Popover: { title: string; subtitle?: string; items: string[] } | undefined;
+  let card5CyclingItems: string[] | undefined;
 
   if (statistics?.card5) {
     if (statistics.card5.mode === 'multi_evidence_topics') {
@@ -177,8 +183,9 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
           card5Value = `${mahalla0} • ${mahalla1}`;
           card5Subtitle = `${statistics.card5.leaderTopicCount} тадан мавзу`;
         } else if (tiedMahallas.length > 2) {
-          card5Value = `Тенг: ${statistics.card5.tiedCount} та маҳалла`;
-          card5Subtitle = `${statistics.card5.leaderTopicCount} тадан мавзу`;
+          card5Value = tiedMahallas[0] ?? `Тенг: ${statistics.card5.tiedCount} та маҳалла`;
+          card5Subtitle = `Тенг: ${statistics.card5.tiedCount} та маҳалла (${statistics.card5.leaderTopicCount} тадан)`;
+          card5CyclingItems = tiedMahallas;
           card5Popover = {
             title: 'Тенг кўрсаткичли маҳаллалар',
             subtitle: `${statistics.card5.leaderTopicCount} тадан мавзу`,
@@ -204,6 +211,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
     iconBgColor: '#D1FAE5',
     iconColor: '#059669',
     popover: card5Popover,
+    cyclingItems: card5CyclingItems,
   };
 
   const cards: CardDescriptor[] = [card1, card2, card3, card4, card5];
@@ -464,6 +472,7 @@ export const TopicStatisticsStrip: React.FC<TopicStatisticsStripProps> = ({
                 comparison={card.comparison}
                 hasComparisonSlot={card.hasComparisonSlot}
                 popover={card.popover}
+                cyclingItems={card.cyclingItems}
               />
             </div>
           ))}

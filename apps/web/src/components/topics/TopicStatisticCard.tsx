@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Skeleton, Popover } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { TopicStatisticCard1Comparison } from '@mahalla-ovozi/api-contracts';
@@ -22,6 +22,7 @@ export interface TopicStatisticCardProps {
   comparison?: TopicStatisticCard1Comparison;
   hasComparisonSlot?: boolean;
   popover?: TopicStatisticCardPopoverProps;
+  cyclingItems?: string[];
 }
 
 export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
@@ -36,7 +37,34 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
   comparison,
   hasComparisonSlot = false,
   popover,
+  cyclingItems,
 }) => {
+  const hasCycling = Boolean(cyclingItems && cyclingItems.length > 1);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+
+  const cyclingKey = cyclingItems?.join('|') ?? '';
+
+  useEffect(() => {
+    setCurrentIndex(0);
+  }, [cyclingKey]);
+
+  useEffect(() => {
+    if (!hasCycling || !cyclingItems || cyclingItems.length <= 1) {
+      return;
+    }
+
+    if (isPaused) {
+      return;
+    }
+
+    const itemCount = cyclingItems.length;
+    const timer = setInterval(() => {
+      setCurrentIndex((prev) => (prev + 1) % itemCount);
+    }, 3500);
+
+    return () => clearInterval(timer);
+  }, [hasCycling, cyclingKey, isPaused, cyclingItems]);
   if (isLoading) {
     const showComparisonSkeleton = hasComparisonSlot || comparison !== undefined;
     return (
@@ -98,12 +126,19 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
     );
   }
 
-  const isLongTextValue = typeof value === 'string' && (value.length > 12 || value.includes('•'));
+  const displayValue =
+    hasCycling && cyclingItems ? (cyclingItems[currentIndex % cyclingItems.length] ?? value) : value;
+
+  const isLongTextValue =
+    (hasCycling && cyclingItems?.some((item) => item.length > 12 || item.includes('•'))) ||
+    (typeof displayValue === 'string' && (displayValue.length > 12 || displayValue.includes('•')));
 
   // Build accessible ARIA description
-  let ariaLabel = `${title}: ${value} ${subtitle}`;
+  let ariaLabel = `${title}: ${displayValue} ${subtitle}`;
   if (popover && popover.items.length > 0) {
-    ariaLabel = `${title}: ${value} ${subtitle}. ${popover.title}: ${popover.items.join(', ')}`;
+    ariaLabel = `${title}: ${displayValue} ${subtitle}. ${popover.title}: ${popover.items.join(', ')}`;
+  } else if (hasCycling && cyclingItems) {
+    ariaLabel = `${title}: ${displayValue} ${subtitle}. Соҳалар: ${cyclingItems.join(', ')}`;
   }
   if (comparison) {
     if (comparison.isAvailable) {
@@ -124,6 +159,25 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
       }
     }
   }
+
+  const cyclingStepBadge = hasCycling && cyclingItems ? (
+    <span
+      data-testid="cycling-step-badge"
+      aria-hidden="true"
+      style={{
+        fontSize: 11,
+        fontWeight: 500,
+        color: '#8c8c8c',
+        marginLeft: 6,
+        padding: '1px 5px',
+        borderRadius: 4,
+        background: 'rgba(0,0,0,0.04)',
+        flexShrink: 0,
+      }}
+    >
+      {currentIndex + 1}/{cyclingItems.length}
+    </span>
+  ) : null;
 
   const popoverContent = popover ? (
     <div style={{ maxWidth: 260, padding: '2px 0' }} data-testid="statistic-card-popover-content">
@@ -206,6 +260,10 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
       tabIndex={-1}
       role="group"
       aria-label={ariaLabel}
+      onMouseEnter={hasCycling ? () => setIsPaused(true) : undefined}
+      onMouseLeave={hasCycling ? () => setIsPaused(false) : undefined}
+      onTouchStart={hasCycling ? () => setIsPaused(true) : undefined}
+      onTouchEnd={hasCycling ? () => setIsPaused(false) : undefined}
       style={{
         backgroundColor: '#FFFFFF',
         border: '1px solid #E2E8F0',
@@ -273,7 +331,7 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
           <button
             type="button"
             data-testid="statistic-card-popover-trigger"
-            aria-label={`${title}: ${value}. ${popover.title}. Батафсил кўриш учун босинг.`}
+            aria-label={`${title}: ${displayValue}. ${popover.title}. Батафсил кўриш учун босинг.`}
             style={{
               background: 'none',
               border: 'none',
@@ -282,14 +340,18 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
               cursor: 'pointer',
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 6,
+              gap: 4,
               maxWidth: '100%',
+              minHeight: 26,
               textAlign: 'left',
               font: 'inherit',
               borderRadius: 4,
+              overflow: 'hidden',
             }}
           >
             <span
+              key={hasCycling ? currentIndex : undefined}
+              aria-live={hasCycling ? 'polite' : undefined}
               style={{
                 fontSize: isLongTextValue ? 16 : 22,
                 fontWeight: 600,
@@ -300,11 +362,14 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
+                opacity: 1,
+                transition: 'opacity 0.3s ease-in-out',
               }}
-              title={typeof value === 'string' ? value : String(value)}
+              title={typeof displayValue === 'string' ? displayValue : String(displayValue)}
             >
-              {value}
+              {displayValue}
             </span>
+            {cyclingStepBadge}
             <InfoCircleOutlined
               style={{
                 fontSize: 13,
@@ -327,11 +392,27 @@ export const TopicStatisticCard: React.FC<TopicStatisticCardProps> = ({
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
+            display: 'flex',
+            alignItems: 'center',
+            minHeight: 26,
           }}
-          title={typeof value === 'string' ? value : String(value)}
-          aria-hidden="true"
+          title={typeof displayValue === 'string' ? displayValue : String(displayValue)}
+          aria-hidden={hasCycling ? undefined : 'true'}
         >
-          {value}
+          <span
+            key={hasCycling ? currentIndex : undefined}
+            aria-live={hasCycling ? 'polite' : undefined}
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              opacity: 1,
+              transition: 'opacity 0.3s ease-in-out',
+            }}
+          >
+            {displayValue}
+          </span>
+          {cyclingStepBadge}
         </div>
       )}
 
