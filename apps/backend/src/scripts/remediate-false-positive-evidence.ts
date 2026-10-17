@@ -39,10 +39,14 @@ import {
   TopicProjectionEvaluator,
   sanitizeUngroundedHokimSummary,
 } from '../modules/topics/topic-projection-evaluator.js';
+import { buildHokimTermsRegex } from '../modules/topics/topic-evidence-service.js';
 import { AiGateway } from '../modules/ai/ai-gateway.js';
 import { HttpProviderAdapter } from '../adapters/ai-providers/http-provider-adapter.js';
 import { getMahallaDailySnapshot } from '../modules/ai/context-snapshot.js';
-import type { QualifyingLane } from '@mahalla-ovozi/api-contracts';
+import {
+  DEFAULT_HOKIM_RECOGNITION_TERMS,
+  type QualifyingLane,
+} from '@mahalla-ovozi/api-contracts';
 
 export interface RemediationOptions {
   execute: boolean;
@@ -207,6 +211,44 @@ export function matchFalsePositiveRule(
 }
 
 /**
+ * Determines the genuine civic lane for a topic whose evidence was misclassified or remediated.
+ * Prioritizes keyword detection in surviving evidence text, falling back to matched rule lane.
+ */
+export function detectSurvivingLane(
+  evidence: Array<{ verbatimText: string }>,
+  mahallaName: string,
+): QualifyingLane {
+  const combined = evidence.map((e) => e.verbatimText).join(' ').toLowerCase();
+
+  // 1. Gas indicators
+  if (/(?:^|\b|[^\p{L}])(?:газ|gaz|hududgaz|ҳудудгаз)(?:[^\p{L}]|\b|$)/iu.test(combined)) {
+    return 'GAS';
+  }
+  // 2. Electricity indicators
+  if (/(?:^|\b|[^\p{L}])(?:свет|chiroq|чироқ|электр|tok|трансформатор|svet)(?:[^\p{L}]|\b|$)/iu.test(combined)) {
+    return 'ELECTRICITY';
+  }
+  // 3. Water indicators
+  if (/(?:^|\b|[^\p{L}])(?:сув|suv|vodokanal|водоканал)(?:[^\p{L}]|\b|$)/iu.test(combined)) {
+    return 'WATER';
+  }
+  // 4. Waste indicators
+  if (/(?:^|\b|[^\p{L}])(?:чиқинди|ахлат|musor|chiqindi|axlat|toza hudud|тоза ҳудуд)(?:[^\p{L}]|\b|$)/iu.test(combined)) {
+    return 'WASTE';
+  }
+
+  // 5. Fall back to target rule lane if mahalla matches a known remediation rule
+  const normMahalla = mahallaName.toLowerCase();
+  for (const rule of FALSE_POSITIVE_RULES) {
+    if (rule.mahallaKeywords.some((kw) => normMahalla.includes(kw))) {
+      return rule.lane;
+    }
+  }
+
+  return 'GAS';
+}
+
+/**
  * Core remediation implementation.
  */
 export async function remediateFalsePositiveEvidence(
@@ -321,9 +363,22 @@ export async function remediateFalsePositiveEvidence(
       }
     }
 
-    if (matchedEvidence.length === 0) {
+    const hokimRegex = buildHokimTermsRegex(DEFAULT_HOKIM_RECOGNITION_TERMS);
+    const hasHokimEvidence = genuineEvidence.some((ev) => hokimRegex.test(ev.verbatimText));
+
+    const isMisclassifiedHokimTopic =
+      primaryLane === 'HOKIM_RELATED' &&
+      !hasHokimEvidence &&
+      genuineEvidence.length > 0;
+
+    if (matchedEvidence.length === 0 && !isMisclassifiedHokimTopic) {
       continue;
     }
+
+    const targetLane: QualifyingLane =
+      primaryLane === 'HOKIM_RELATED' || isMisclassifiedHokimTopic
+        ? detectSurvivingLane(genuineEvidence, mahallaName)
+        : (primaryLane as QualifyingLane);
 
     totalMatchedEvidence += matchedEvidence.length;
 
@@ -337,10 +392,13 @@ export async function remediateFalsePositiveEvidence(
       : null;
 
     console.log(`\n-------------------------------------------------------------------`);
-    console.log(`📌 Target Topic Found: ${topicId} [${primaryLane}] - "${mahallaName}"`);
+    console.log(`📌 Target Topic Found: ${topicId} [${primaryLane}${primaryLane !== targetLane ? ` -> ${targetLane}` : ''}] - "${mahallaName}"`);
     console.log(`   Total Evidence in Topic:    ${evidenceList.length}`);
     console.log(`   False-Positives to Remove:  ${matchedEvidence.length}`);
     console.log(`   Genuine Evidence Remaining: ${genuineEvidence.length}`);
+    if (isMisclassifiedHokimTopic) {
+      console.log(`   ⚠️  Detected misclassified Hokim topic without Hokim evidence. Correcting lane to [${targetLane}].`);
+    }
     for (const m of matchedEvidence) {
       console.log(`   ❌ [MATCH] Evidence ${m.evidenceId} (Msg #${m.telegramMessageId}): "${m.verbatimText.slice(0, 60)}..."`);
       console.log(`      Matched Rule: ${m.matchedRule.targetLabel}`);
@@ -351,7 +409,7 @@ export async function remediateFalsePositiveEvidence(
       districtId,
       mahallaName,
       calendarDay,
-      primaryLane,
+      primaryLane: targetLane,
       beforeEvidenceCount: evidenceList.length,
       afterEvidenceCount: genuineEvidence.length,
       remediatedEvidenceIds: matchedEvidence.map((m) => m.evidenceId),
@@ -362,9 +420,14 @@ export async function remediateFalsePositiveEvidence(
     };
 
     if (dryRun) {
-      console.log(`   🔍 [DRY-RUN] Would delete ${matchedEvidence.length} evidence records.`);
-      console.log(`   🔍 [DRY-RUN] Would set ${matchedEvidence.length} intake records to EXCLUDED / GENERAL_CHATTER.`);
-      console.log(`   🔍 [DRY-RUN] Would re-project topic ${topicId} with ${genuineEvidence.length} remaining evidence items.`);
+      if (matchedEvidence.length > 0) {
+        console.log(`   🔍 [DRY-RUN] Would delete ${matchedEvidence.length} evidence records.`);
+        console.log(`   🔍 [DRY-RUN] Would set ${matchedEvidence.length} intake records to EXCLUDED / GENERAL_CHATTER.`);
+      }
+      if (primaryLane !== targetLane) {
+        console.log(`   🔍 [DRY-RUN] Would update topic primary_lane: "${primaryLane}" -> "${targetLane}".`);
+      }
+      console.log(`   🔍 [DRY-RUN] Would re-project topic ${topicId} with ${genuineEvidence.length} remaining evidence items into lane "${targetLane}".`);
       reports.push(report);
       continue;
     }
@@ -378,8 +441,14 @@ export async function remediateFalsePositiveEvidence(
 
     // Transactional evidence cleanup & intake exclusion
     const executeCleanup = async (client: pg.PoolClient) => {
-      // 1. Referential integrity: if current projection anchor is being deleted, re-anchor to remaining genuine evidence
-      if (safeAnchorId && firstRow.projectionId) {
+      // 1. Referential integrity: if current projection anchor is being deleted or topic lane changed, re-anchor to remaining genuine evidence
+      if (
+        safeAnchorId &&
+        firstRow.projectionId &&
+        (evIdsToDelete.includes(firstRow.anchorEvidenceId ?? '') ||
+          !firstRow.anchorEvidenceId ||
+          primaryLane !== targetLane)
+      ) {
         await client.query(
           `UPDATE topic_projections 
            SET anchor_evidence_id = $1, updated_at = NOW() 
@@ -391,30 +460,34 @@ export async function remediateFalsePositiveEvidence(
         await client.query(`DELETE FROM topic_projections WHERE topic_id = $1`, [topicId]);
       }
 
-      // 2. Delete false-positive evidence rows
-      await client.query(
-        `DELETE FROM accepted_evidence WHERE id = ANY($1::text[])`,
-        [evIdsToDelete],
-      );
+      // 2. Delete false-positive evidence rows (if any)
+      if (evIdsToDelete.length > 0) {
+        await client.query(
+          `DELETE FROM accepted_evidence WHERE id = ANY($1::text[])`,
+          [evIdsToDelete],
+        );
+      }
 
-      // 3. Mark intake records as EXCLUDED / GENERAL_CHATTER
-      const exclusionPayload = JSON.stringify({
-        status: 'EXCLUDED',
-        exclusionReason: 'GENERAL_CHATTER',
-        remediatedAt: new Date().toISOString(),
-        remediationReason: 'Remediated false-positive civic evidence via data remediation script',
-      });
+      // 3. Mark intake records as EXCLUDED / GENERAL_CHATTER (if any)
+      if (intakeIdsToExclude.length > 0) {
+        const exclusionPayload = JSON.stringify({
+          status: 'EXCLUDED',
+          exclusionReason: 'GENERAL_CHATTER',
+          remediatedAt: new Date().toISOString(),
+          remediationReason: 'Remediated false-positive civic evidence via data remediation script',
+        });
 
-      await client.query(
-        `UPDATE telegram_intake_records
-         SET status = 'EXCLUDED',
-             raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $1::jsonb,
-             updated_at = NOW()
-         WHERE id = ANY($2::text[])`,
-        [exclusionPayload, intakeIdsToExclude],
-      );
+        await client.query(
+          `UPDATE telegram_intake_records
+           SET status = 'EXCLUDED',
+               raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $1::jsonb,
+               updated_at = NOW()
+           WHERE id = ANY($2::text[])`,
+          [exclusionPayload, intakeIdsToExclude],
+        );
+      }
 
-      // 4. Update topic's latestRelevantEvidenceTimestamp & bump required generation
+      // 4. Update topic's primary_lane, latestRelevantEvidenceTimestamp & bump required generation
       if (genuineEvidence.length > 0) {
         const { rows: maxRows } = await client.query<{ maxTs: Date }>(
           `SELECT MAX(original_timestamp) as "maxTs" FROM accepted_evidence WHERE topic_id = $1`,
@@ -424,11 +497,12 @@ export async function remediateFalsePositiveEvidence(
 
         await client.query(
           `UPDATE topics 
-           SET latest_relevant_evidence_timestamp = $1,
-               required_derived_generation = $2,
+           SET primary_lane = $1,
+               latest_relevant_evidence_timestamp = $2,
+               required_derived_generation = $3,
                updated_at = NOW()
-           WHERE id = $3`,
-          [maxTs, nextGeneration, topicId],
+           WHERE id = $4`,
+          [targetLane, maxTs, nextGeneration, topicId],
         );
       }
     };
@@ -438,8 +512,13 @@ export async function remediateFalsePositiveEvidence(
       await client.query('BEGIN');
       await executeCleanup(client);
       await client.query('COMMIT');
-      console.log(`   ✅ Removed ${evIdsToDelete.length} false-positive evidence records from DB.`);
-      console.log(`   ✅ Marked ${intakeIdsToExclude.length} intake records as EXCLUDED (GENERAL_CHATTER).`);
+      if (evIdsToDelete.length > 0) {
+        console.log(`   ✅ Removed ${evIdsToDelete.length} false-positive evidence records from DB.`);
+        console.log(`   ✅ Marked ${intakeIdsToExclude.length} intake records as EXCLUDED (GENERAL_CHATTER).`);
+      }
+      if (primaryLane !== targetLane) {
+        console.log(`   ✅ Corrected topic primary_lane: "${primaryLane}" -> "${targetLane}".`);
+      }
     } catch (cleanErr) {
       await client.query('ROLLBACK');
       console.error(`   ❌ Failed to clean up evidence for topic ${topicId}:`, cleanErr);
@@ -476,7 +555,7 @@ export async function remediateFalsePositiveEvidence(
 
         const evaluation = await evaluator.evaluateTopicProjection({
           topicId,
-          primaryLane: primaryLane as QualifyingLane,
+          primaryLane: targetLane,
           generation: nextGeneration,
           snapshot,
         });
@@ -522,6 +601,7 @@ export async function remediateFalsePositiveEvidence(
              summary = EXCLUDED.summary,
              latest_update = EXCLUDED.latest_update,
              lanes = EXCLUDED.lanes,
+             primary_lane = EXCLUDED.primary_lane,
              anchor_evidence_id = EXCLUDED.anchor_evidence_id,
              anchor_quote = EXCLUDED.anchor_quote,
              latest_meaningful_activity_timestamp = EXCLUDED.latest_meaningful_activity_timestamp,
@@ -540,7 +620,7 @@ export async function remediateFalsePositiveEvidence(
             evaluation.summary,
             evaluation.latestUpdate,
             JSON.stringify(evaluation.lanes),
-            primaryLane,
+            targetLane,
             evaluation.anchorEvidenceId,
             evaluation.anchorQuote,
             evaluation.latestMeaningfulActivityTimestamp,
@@ -576,13 +656,23 @@ export async function remediateFalsePositiveEvidence(
     if (!reprojected) {
       console.log(`   🛡️ Applying deterministic projection sanitation...`);
       const existingSummary = firstRow.summary ?? 'Коммунал хизмат кўрсатиш тизимида узилиш кузатилмоқда';
-      const sanitizedSummary = sanitizeUngroundedHokimSummary(existingSummary);
+      let sanitizedSummary = sanitizeUngroundedHokimSummary(existingSummary);
 
-      let updatedLanes: QualifyingLane[] = (firstRow.lanes || [primaryLane as QualifyingLane]).filter(
+      if (targetLane === 'GAS') {
+        if (/ҳокимлик|мутасаддилар/iu.test(existingSummary) || /газ таъминоти/iu.test(sanitizedSummary)) {
+          sanitizedSummary = 'Газ таъминотида узилиш ёки босим пастлиги хабар қилинмоқда.';
+        }
+      } else if (targetLane === 'ELECTRICITY') {
+        if (/ҳокимлик|мутасаддилар/iu.test(existingSummary) || /электр таъминоти/iu.test(sanitizedSummary)) {
+          sanitizedSummary = 'Электр таъминотида узилиш юз бергани хабар қилинмоқда.';
+        }
+      }
+
+      let updatedLanes: QualifyingLane[] = (firstRow.lanes || [targetLane]).filter(
         (l) => l !== 'HOKIM_RELATED',
       );
-      if (!updatedLanes.includes(primaryLane as QualifyingLane)) {
-        updatedLanes.push(primaryLane as QualifyingLane);
+      if (!updatedLanes.includes(targetLane)) {
+        updatedLanes.push(targetLane);
       }
 
       // If target topic has only 1 message, latest_update is strictly null
@@ -600,15 +690,17 @@ export async function remediateFalsePositiveEvidence(
          SET summary = $1,
              latest_update = $2,
              lanes = $3,
+             primary_lane = $4,
              is_hokim_related = false,
-             anchor_evidence_id = $4,
-             generation = $5,
+             anchor_evidence_id = $5,
+             generation = $6,
              updated_at = NOW()
-         WHERE topic_id = $6`,
+         WHERE topic_id = $7`,
         [
           sanitizedSummary,
           updatedLatestUpdate,
           JSON.stringify(updatedLanes),
+          targetLane,
           fallbackAnchor,
           nextGeneration,
           topicId,

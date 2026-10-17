@@ -154,13 +154,13 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
       aiProfileId: profile.id,
     });
 
-    // 4. Insert Gas Topic (Раваллик ва Яккакайрогоч МФЙ)
+    // 4. Insert Gas Topic (Раваллик ва Яккакайрогоч МФЙ) born as HOKIM_RELATED due to false-positive prosecutor message
     await db.insert(topics).values({
       id: gasTopicId,
       districtId,
       mahallaName: 'Раваллик ва Яккакайрогоч МФЙ',
       calendarDay: testCalendarDay,
-      primaryLane: 'GAS',
+      primaryLane: 'HOKIM_RELATED',
       status: 'ACTIVE',
       latestRelevantEvidenceTimestamp: new Date(),
       retentionExpiresAt: new Date(Date.now() + 86400000 * 30),
@@ -221,8 +221,8 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
       calendarDay: testCalendarDay,
       summary: 'Раваллик ва Яккакайрогоч МФЙда газ қувури юзасидан ҳокимликка эътироз билдирилгани хабар қилинмоқда',
       latestUpdate: 'Ҳокимлик ва мутасадди идораларга эътироз билдирилмоқда',
-      lanes: ['GAS', 'HOKIM_RELATED'],
-      primaryLane: 'GAS',
+      lanes: ['HOKIM_RELATED', 'GAS'],
+      primaryLane: 'HOKIM_RELATED',
       anchorEvidenceId: gasFpEvidence1Id, // Anchored to the false positive to verify safe decoupling
       anchorQuote: 'Ушбу Ким ошдига прокурор назорат',
       latestMeaningfulActivityTimestamp: new Date(),
@@ -345,6 +345,14 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
     expect(elecProjection!.isHokimRelated).toBe(false);
 
     // 2. Verify Gas Topic state
+    const [gasTopicRow] = await db
+      .select()
+      .from(topics)
+      .where(eq(topics.id, gasTopicId));
+    expect(gasTopicRow).toBeDefined();
+    // topics.primary_lane MUST be corrected from HOKIM_RELATED to GAS
+    expect(gasTopicRow!.primaryLane).toBe('GAS');
+
     const remainingGasEvidence = await db
       .select()
       .from(acceptedEvidence)
@@ -357,13 +365,14 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
       .from(topicProjections)
       .where(eq(topicProjections.topicId, gasTopicId));
     expect(gasProjection).toBeDefined();
-    // HOKIM_RELATED must be stripped from lanes and is_hokim_related must be false
-    expect(gasProjection!.lanes).not.toContain('HOKIM_RELATED');
-    expect(gasProjection!.lanes).toContain('GAS');
+    // primary_lane MUST be GAS
+    expect(gasProjection!.primaryLane).toBe('GAS');
+    // HOKIM_RELATED must be completely eliminated from lanes and is_hokim_related must be false
+    expect(gasProjection!.lanes).toEqual(['GAS']);
     expect(gasProjection!.isHokimRelated).toBe(false);
-    // Ungrounded Hokim accusations in summary must be sanitized
-    expect(gasProjection!.summary).not.toMatch(/[ҳхh]окимликка\s+эътироз/i);
-    expect(gasProjection!.summary).toContain('мутасаддиларга эътироз');
+    // Ungrounded Hokim accusations in summary must be replaced with canonical gas outage summary
+    expect(gasProjection!.summary).not.toMatch(/[ҳхh]оким/i);
+    expect(gasProjection!.summary).toBe('Газ таъминотида узилиш ёки босим пастлиги хабар қилинмоқда.');
     // Anchor evidence must safely point to the remaining genuine gas evidence
     expect(gasProjection!.anchorEvidenceId).toBe(gasGenuineEvidenceId);
 
@@ -423,5 +432,101 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
       .from(acceptedEvidence)
       .where(eq(acceptedEvidence.topicId, gasTopicId));
     expect(remainingGasEvidence.length).toBe(1);
+  });
+
+  it('remediates surviving gas topic born as HOKIM_RELATED even when false positives are already absent', async () => {
+    const standaloneGasTopicId = `top_standalone_gas_${Date.now()}`;
+    const standaloneEviId = `evi_standalone_gas_${Date.now()}`;
+    const standaloneIntakeId = `intake_standalone_gas_${Date.now()}`;
+    const profile = await db.query.aiProfiles.findFirst();
+
+    await db.insert(telegramIntakeRecords).values({
+      id: standaloneIntakeId,
+      districtId,
+      mahallaName: 'Раваллик ва Яккакайрогоч МФЙ',
+      source: 'BOT_API',
+      telegramBotId: 'bot_1',
+      telegramChatId: '-100999888',
+      telegramMessageId: '3001',
+      originalTimestamp: new Date(),
+      calendarDay: testCalendarDay,
+      rawPayload: { text: 'Газ трубаси кимни жавобгарлигида, газ босими паст' },
+      status: 'ACCEPTED',
+    });
+
+    await db.insert(topics).values({
+      id: standaloneGasTopicId,
+      districtId,
+      mahallaName: 'Раваллик ва Яккакайрогоч МФЙ',
+      calendarDay: testCalendarDay,
+      primaryLane: 'HOKIM_RELATED',
+      status: 'ACTIVE',
+      latestRelevantEvidenceTimestamp: new Date(),
+      retentionExpiresAt: new Date(Date.now() + 86400000 * 30),
+      requiredDerivedGeneration: 1,
+      appliedDerivedGeneration: 1,
+    });
+
+    await db.insert(acceptedEvidence).values({
+      id: standaloneEviId,
+      topicId: standaloneGasTopicId,
+      districtId,
+      mahallaName: 'Раваллик ва Яккакайрогоч МФЙ',
+      calendarDay: testCalendarDay,
+      intakeRecordId: standaloneIntakeId,
+      telegramChatId: '-100999888',
+      telegramMessageId: '3001',
+      originalTimestamp: new Date(),
+      verbatimText: 'Газ трубаси кимни жавобгарлигида, газ босими паст',
+      contentType: 'TEXT',
+    });
+
+    await db.insert(topicProjections).values({
+      id: `prj_standalone_${Date.now()}`,
+      topicId: standaloneGasTopicId,
+      districtId,
+      mahallaName: 'Раваллик ва Яккакайрогоч МФЙ',
+      calendarDay: testCalendarDay,
+      summary: 'Газ таъминотидаги муаммо бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.',
+      latestUpdate: null,
+      lanes: ['HOKIM_RELATED', 'GAS'],
+      primaryLane: 'HOKIM_RELATED',
+      anchorEvidenceId: standaloneEviId,
+      anchorQuote: 'Газ трубаси',
+      latestMeaningfulActivityTimestamp: new Date(),
+      attribution: 'Маҳалла фуқароси',
+      isHokimRelated: true,
+      generation: 1,
+      aiProfileId: profile!.id,
+    });
+
+    const run = await remediateFalsePositiveEvidence(
+      { db, pool },
+      { execute: true, dryRun: false, skipAi: true, topicId: standaloneGasTopicId },
+    );
+
+    expect(run.matchedEvidenceCount).toBe(0);
+    expect(run.affectedTopicsCount).toBe(1);
+
+    const [updatedTopic] = await db
+      .select()
+      .from(topics)
+      .where(eq(topics.id, standaloneGasTopicId));
+    expect(updatedTopic!.primaryLane).toBe('GAS');
+
+    const [updatedProjection] = await db
+      .select()
+      .from(topicProjections)
+      .where(eq(topicProjections.topicId, standaloneGasTopicId));
+    expect(updatedProjection!.primaryLane).toBe('GAS');
+    expect(updatedProjection!.lanes).toEqual(['GAS']);
+    expect(updatedProjection!.isHokimRelated).toBe(false);
+    expect(updatedProjection!.summary).toBe('Газ таъминотида узилиш ёки босим пастлиги хабар қилинмоқда.');
+
+    // Cleanup standalone test data
+    await db.delete(topicProjections).where(eq(topicProjections.topicId, standaloneGasTopicId));
+    await db.delete(acceptedEvidence).where(eq(acceptedEvidence.topicId, standaloneGasTopicId));
+    await db.delete(topics).where(eq(topics.id, standaloneGasTopicId));
+    await db.delete(telegramIntakeRecords).where(eq(telegramIntakeRecords.id, standaloneIntakeId));
   });
 });
