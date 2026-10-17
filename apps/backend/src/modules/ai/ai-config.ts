@@ -79,6 +79,8 @@ STRICT DROP POLICY & ADVERSARIAL ANTI-PATTERNS:
 - Private Appliances & Domestic Devices (is_relevant: false -> ADVERTISEMENT_OR_SPAM or GENERAL_CHATTER): Failures restricted to private domestic appliances or personal vehicles ("mashinaga suv kemayapti", "boylerga suv kemadi", "gaz plita nosoz") are private issues, NOT municipal intelligence.
 - Outage Negation & Service Affirmations (is_relevant: false -> GENERAL_CHATTER or NEUTRAL_OR_PRAISE): Asserting that service is present or denying an outage ("suv kemasdan qolgani yo'q", "svet o'chmadi", "suv kam emas") does not report a disruption.
 - Non-Assertive Contextless Chatter: Questions containing no disruption facts ("kimdir biladimi?", "nima bo'ldi?", "hammada tinchlikmi?") -> is_relevant: false (GENERAL_CHATTER).
+- Law Enforcement, Judicial & Administrative Inquiries without Hokim (is_relevant: false -> GENERAL_CHATTER): Appeals or reports directed to the Police / IIB ("милиция", "ИИБ", "участковой"), Prosecutor ("прокурор", "прокуратура"), Courts ("суд"), or Tax ("ДСИ") that do not explicitly name the District Hokim or Hokimiyat (and lack municipal utility disruption predicates) fail the municipal substance gate.
+- Informal Neighborhood Money Collections & Activist Disputes (is_relevant: false -> GENERAL_CHATTER): Neighborhood self-organized fundraising, money collections ("пул йиғилган", "тўлқин ака йиққан", "pul yig'ildi"), or local activist arguments are private community disputes, NOT municipal complaints.
 
 ### 3. THE 5 IMMUTABLE MUNICIPAL LANES
 When substantive failure criteria are met, assign strictly to applicable lanes:
@@ -93,6 +95,10 @@ When substantive failure criteria are met, assign strictly to applicable lanes:
      b) Colloquial, phonetic typos, and dialect variations: "xokim", "hakim", "xakim", "hokimyat", "xokimyat", "hokimat", "xokimat", "hokim buva", "hokimbobo", "hokimimiz".
      c) Direct Hokimiyat apparatus officials: "zamhokim", "hokim yordamchisi".
      d) Non-qualifying entities: "mahalla raisi" or "oqsoqol" do NOT qualify unless "hokim" or "hokimiyat" is explicitly named alongside them.
+   - LAW ENFORCEMENT, PROSECUTOR & JUDICIAL NEGATIVE BOUNDARY:
+     Appeals, requests for supervision, or reports directed to the Prosecutor / Prokuratura ("прокурор", "прокуратура", "prokuror", "prokuratura"), Police / IIB / Precinct Officer ("милиция", "ИИБ", "участковой", "profilaktika inspektori"), Courts ("суд", "sud"), or Tax ("ДСИ", "soliq") MUST NEVER be tagged as HOKIM_RELATED unless the Hokim or Hokimiyat is explicitly and directly named alongside them.
+   - NEIGHBORHOOD MONEY COLLECTIONS & ACTIVIST DISPUTES EXCLUSION:
+     Neighborhood money collections, self-organized fundraising ("пул йиғилган", "тўлқин ака йиққан", "pul yig'ildi", "pul berdik"), and local activist disputes are NOT Hokim complaints and fail the municipal substance gate (classify as GENERAL_CHATTER unless reporting a specific utility failure).
    - CONTEXTUAL FOLLOW-UP INHERITANCE:
      A follow-up message (direct reply or burst continuation) qualifies for HOKIM_RELATED without repeating a Hokim keyword ONLY IF it directly and substantively continues a qualified Hokim appeal from the active conversation/burst. Standalone, isolated messages lacking these terms must NEVER receive HOKIM_RELATED.
    - ROAD & GENERAL INFRASTRUCTURE EXCLUSION:
@@ -115,7 +121,7 @@ Mahalla Ovozi exclusively tracks public municipal utility networks and district 
 - PLANNED_ANNOUNCEMENT: Official scheduled maintenance notices from utility authorities.
 - SPECULATION_OR_RUMOR: Speculative questions or hypothetical conditionals imagining future cuts ("bugun gaz o'chmaydimi?", "ertaga suv kemaydimi?", "agar svet o'chsa nima bo'ladi?", "suvniyam uzishsa endi"), unconfirmed hearsay, gossip, future price rumors.
 - NEUTRAL_OR_PRAISE: Generic greetings, prayers, gratitude ("rahmat svet yondi"), affirmations of uninterrupted service ("suv kam emas").
-- GENERAL_CHATTER: Conversational chatter, greetings without civic substance, cynical conditional irony or fatalistic jokes about unoccurred disruptions ("svettiyam ucirishsa endi balans buladi, kolxoz buladi", "endi gazniyam uzishsa to'y bo'lardi"), contextless inquiries ("kimdir biladimi?"), outage negations ("svet o'chmadi"), off-topic debates, jokes, general road or infrastructure complaints lacking Hokim/Hokimiyat mentions and lacking Water/Electricity/Gas/Waste issues, live operational vehicle tracking inquiries ("musor mashina qaysi ko'chada?"), routine mobile service ETA inquiries without reported delay ("musor soat nechada keladi?"), standalone contact/phone number requests ("elektroset nomeri bormi?"), and routine service arrival announcements on an empty board ("musor keldi chiqaringlar").
+- GENERAL_CHATTER: Conversational chatter, greetings without civic substance, cynical conditional irony or fatalistic jokes about unoccurred disruptions ("svettiyam ucirishsa endi balans buladi, kolxoz buladi", "endi gazniyam uzishsa to'y bo'lardi"), contextless inquiries ("kimdir biladimi?"), outage negations ("svet o'chmadi"), off-topic debates, jokes, general road or infrastructure complaints lacking Hokim/Hokimiyat mentions and lacking Water/Electricity/Gas/Waste issues, appeals to Law Enforcement / Prosecutor / Courts lacking explicit Hokim mentions ("прокурорга ёзамиз", "участковойга айтинг"), informal neighborhood money collections / activist disputes ("пул йиғилган", "тўлқин ака йиққан"), casual bystander directions or informal vendor inquiries ("stansada nos sotayotganlar atrofiga borsez", "qanchayakan"), live operational vehicle tracking inquiries ("musor mashina qaysi ko'chada?"), routine mobile service ETA inquiries without reported delay ("musor soat nechada keladi?"), standalone contact/phone number requests ("elektroset nomeri bormi?"), and routine service arrival announcements on an empty board ("musor keldi chiqaringlar").
 - UNRESOLVED_AMBIGUOUS_FRAGMENT:
   - Strictly applies when either the Subject is missing without context ("kemadiku", "haliyam yo'q", "o'chdiku", "ha", "ok", "bizda ham") OR the Predicate is missing without context (isolated single-word tags like "suv", "gaz", "suvchi").
   - STRICT PROHIBITION: You MUST NEVER assign UNRESOLVED_AMBIGUOUS_FRAGMENT to a message containing both a qualified utility subject and a disruption/absence predicate (e.g. "suv kemadiku", "gaz kelmadi", "svet o'chdi"). Brief two-word assertions are complete civic propositions!
@@ -219,6 +225,12 @@ These empirical rules capture real-world communication habits observed across Uz
 - Utility enterprise names combined with spatial/locational postpositions ('orqasi', 'orqa tarafi', 'yoni', 'ro'parasi', 'oldi', 'ko'chasi', 'garaj tarafi', 'tarafideyi kucagayam') designate a PHYSICAL LANDMARK / ADDRESS (MANZIL / MO'LJAL). IT REPRESENTS A PHYSICAL LANDMARK / ADDRESS, NOT A DISRUPTION OF THAT NAMED UTILITY!
 - Examples: "Elektroset / Elektrosvetni orqa tarafi", "Vodokanal ro'parasida", "Raygaz orqasidagi ko'cha".
 - The true service lane follows the actual failure predicate (e.g. "Vodokanal ro'parasida svet o'chdi" -> ELECTRICITY) or active conversational thread (e.g. garbage truck route discussion + "Elektrosvetni orqa tarafi borku garaj tarafga musr kemaganiga anca buldi..." -> WASTE).
+- INFORMAL STREET VENDOR & TRANSIT LANDMARKS (CASUAL CHATTER EXCLUSION):
+  - Informal street vendor markers ("nos sotayotganlar", "somsa", "bozorcha", "choyxona") and transit stations ("stansa", "vokzal", "avtostansiya", "oxirgi bekat") used in casual chat without an active utility failure predicate do NOT constitute municipal civic evidence and must be classified as GENERAL_CHATTER.
+  - Examples of non-civic casual chatter:
+    - Bystander directions or chatter: "stansada nos sotayotganlar atrofiga borsez shu atrofda", "bozorcha oldidagi somsaxona ochiqmi?" -> GENERAL_CHATTER.
+    - Isolated price or vendor questions: "qanchayakan", "necha pul", "qayerda sotadi" -> GENERAL_CHATTER.
+  - A landmark or orientir ONLY serves as evidence when anchored to a verified, active municipal service disruption predicate (e.g. "stansada nos sotayotganlar oldida suv quvuri yorilib ketdi" -> WATER).
 
 ### 13. UZBEK MODAL RESTORATION ESTIMATES (-sa kerak / -sa kere / -sa kereya) VS. CONDITIONAL SHUTOFFS
 - In Uzbek grammar, the construction "-sa kerak" / "-sa kere" / "-sa kereya" is NOT a conditional hypothetical "if". It is the epistemic modal auxiliary of presumption/probability ("it will probably / likely happen, I guess").
@@ -285,8 +297,15 @@ These empirical rules capture real-world communication habits observed across Uz
 - THE NATURE OF NEIGHBORHOOD CHAT DYNAMICS:
   - In Telegram community groups, conversation threads frequently interleave. Multiple residents may post advertisements, private sales/errands, greetings, or unrelated chatter between genuine municipal complaints.
 - CHAT CONTINUITY STATUS:
-  1. DIRECT CONTINUATION (0 Intervening Messages):
-     - When a candidate message immediately follows a municipal issue message with 0 intervening messages, it is part of the active thread. Elliptical questions or "+1" confirmations (e.g. "bizda ham", "qachon berishadi") inherit the preceding lane.
+  1. DIRECT CONTINUATION (0 Intervening Messages) & SUBSTANTIVE MEANING GATE:
+     - DO NOT blindly accept a message simply because it was posted immediately after an issue report with 0 intervening messages. You MUST evaluate the message's CORE SUBSTANTIVE MEANING in the context of the conversation.
+     - A follow-up message is accepted as evidence ONLY IF its core meaning genuinely provides civic substance:
+       * Direct status confirmation / corroboration: Outage confirmed in another street or home (e.g. "+1 bizdayam o'chdi", "bizda ham o'chdi", "ha bizdayam yo'q").
+       * Timely municipal inquiry: Asking when power/gas/water/waste service will be restored, or asking for emergency utility contacts (e.g. "qachon berishadi?", "avariya nomeri bormi?").
+       * Factual clarification of the municipal problem: Specific address, transformer fire/sparking, burst pipe location, duration, or water pressure details.
+     - STRICT EXCLUSION OF CASUAL CHATTER & BYSTANDER REMARKS:
+       * Casual bystander directions, informal chat, or references to people/street vendors (e.g. "stansada nos sotayotganlar atrofiga borsez shu atrofda", "bozorcha oldidagi somsaxona ochiqmi?"), isolated price questions ("qanchayakan", "necha pul"), or off-topic dialogue DO NOT provide civic substance.
+       * They MUST be classified as is_relevant: false with exclusion_reason: GENERAL_CHATTER (or excluded from accepted_message_ids in bursts).
   2. INTERRUPTED THREAD (Intervening Unrelated Messages > 0):
      - When the prompt indicates "Conversational Continuity: BROKEN" (intervening unrelated messages exist between earlier civic evidence and the candidate) and the candidate has NO explicit reply target:
      - THE CANDIDATE MUST BE FULLY SELF-CONTAINED: It must independently contain both an explicit municipal/utility subject (e.g. "suv", "svet", "gaz", "musor") AND a disruption/inquiry predicate.

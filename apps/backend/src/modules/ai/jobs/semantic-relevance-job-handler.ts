@@ -545,15 +545,19 @@ export async function processSemanticRelevanceJobs(
 
           const aiOperationId = `aiop_${crypto.randomUUID()}`;
           const isRelevant = aiResult.data.is_relevant;
-          const finalStatus = isRelevant ? 'COMPLETED_RELEVANT' : 'COMPLETED_IRRELEVANT';
+          const isBurst = Boolean(burstMessages && burstMessages.length > 0);
 
           const acceptedIds = new Set(
-            Array.isArray(aiResult.data.accepted_message_ids) &&
-            aiResult.data.accepted_message_ids.length > 0
-              ? aiResult.data.accepted_message_ids
-              : burstMessages && burstMessages.length > 0
-                ? burstMessages.map((m) => m.telegramMessageId)
-                : [telegramMessageId],
+            isBurst
+              ? Array.isArray(aiResult.data.accepted_message_ids)
+                ? aiResult.data.accepted_message_ids
+                : []
+              : Array.isArray(aiResult.data.accepted_message_ids) &&
+                  aiResult.data.accepted_message_ids.length > 0
+                ? aiResult.data.accepted_message_ids
+                : isRelevant
+                  ? [telegramMessageId]
+                  : [],
           );
 
           // Atomic PostgreSQL commit + downstream enqueue via withTransactionalIntake
@@ -594,47 +598,53 @@ export async function processSemanticRelevanceJobs(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tx from withTransactionalIntake is structurally DbOrTx; module-identity mismatch in TS
             await insertAiProviderAttempts(tx as any, aiOperationId, aiResult);
 
-            if (isRelevant) {
+            const filteredBurstMessages = burstMessages
+              ? burstMessages.filter((m) => acceptedIds.has(m.telegramMessageId))
+              : undefined;
+
+            const excludedBurstItems = burstMessages
+              ? burstMessages.filter((m) => !acceptedIds.has(m.telegramMessageId))
+              : [];
+
+            if (excludedBurstItems.length > 0) {
+              const excludedIntakeIds = excludedBurstItems.map((m) => m.intakeId);
+              const expiresAt = new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString();
+              const exclusionMeta = JSON.stringify({
+                status: 'EXCLUDED',
+                exclusionReason: 'GENERAL_CHATTER',
+                reasoning:
+                  'Кетма-кет ёзилган хабарлардан ушбу қисмда соҳага оид муаммо ёки манзил аниқланмади',
+                expiresAt,
+                purgedAt: null,
+              });
+              await tx
+                .update(telegramIntakeRecords)
+                .set({
+                  rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
+                  updatedAt: new Date(),
+                })
+                .where(inArray(telegramIntakeRecords.id, excludedIntakeIds));
+            }
+
+            const primaryAcceptedItem =
+              filteredBurstMessages && filteredBurstMessages.length > 0
+                ? filteredBurstMessages[0]!
+                : null;
+
+            const shouldEnqueueTopic =
+              isRelevant && (!isBurst || (filteredBurstMessages && filteredBurstMessages.length > 0));
+
+            if (shouldEnqueueTopic) {
               // 3. Enqueue Story 2.4 Topic Assignment job (AC 3, 9)
-              const filteredBurstMessages = burstMessages
-                ? burstMessages.filter((m) => acceptedIds.has(m.telegramMessageId))
-                : undefined;
-
-              const excludedBurstItems = burstMessages
-                ? burstMessages.filter((m) => !acceptedIds.has(m.telegramMessageId))
-                : [];
-
-              if (excludedBurstItems.length > 0) {
-                const excludedIntakeIds = excludedBurstItems.map((m) => m.intakeId);
-                const expiresAt = new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString();
-                const exclusionMeta = JSON.stringify({
-                  status: 'EXCLUDED',
-                  exclusionReason: 'GENERAL_CHATTER',
-                  reasoning:
-                    'Кетма-кет ёзилган хабарлардан ушбу қисмда соҳага оид муаммо ёки манзил аниқланмади',
-                  expiresAt,
-                  purgedAt: null,
-                });
-                await tx
-                  .update(telegramIntakeRecords)
-                  .set({
-                    rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
-                    updatedAt: new Date(),
-                  })
-                  .where(inArray(telegramIntakeRecords.id, excludedIntakeIds));
-              }
-
-              const primaryAcceptedItem =
-                filteredBurstMessages && filteredBurstMessages.length > 0
-                  ? filteredBurstMessages[0]!
-                  : null;
-
               const effectiveIntakeId = primaryAcceptedItem ? primaryAcceptedItem.intakeId : intakeId;
               const effectiveMessageId = primaryAcceptedItem
                 ? primaryAcceptedItem.telegramMessageId
                 : telegramMessageId;
               const effectiveUserMetadata =
                 primaryAcceptedItem?.userMetadata ?? job.data.userMetadata ?? null;
+              const effectiveVerbatimText = primaryAcceptedItem
+                ? primaryAcceptedItem.verbatimText
+                : verbatimText;
 
               const topicJobData: TelegramTopicAssignmentJobData = {
                 intakeId: effectiveIntakeId,
@@ -648,7 +658,7 @@ export async function processSemanticRelevanceJobs(
                   ? primaryAcceptedItem.originalTimestamp
                   : originalTimestamp,
                 contentType: primaryAcceptedItem ? primaryAcceptedItem.contentType : contentType,
-                verbatimText,
+                verbatimText: effectiveVerbatimText,
                 replyMetadata,
                 userMetadata: effectiveUserMetadata,
                 aiOperationId,
@@ -671,7 +681,7 @@ export async function processSemanticRelevanceJobs(
                 retryDelay: 5,
                 retryBackoff: true,
               });
-            } else {
+            } else if (!isRelevant) {
               // 4. Retain bounded debug payload in DB for 48 hours (2 days) and purge memory (Decision 1 / Bounded Debug Retention)
               const allIntakeIds =
                 burstMessages && burstMessages.length > 0
@@ -697,9 +707,15 @@ export async function processSemanticRelevanceJobs(
                 .where(inArray(telegramIntakeRecords.id, allIntakeIds));
 
               verbatimText = ''; // Memory purge
+            } else {
+              verbatimText = ''; // Memory purge for burst with no accepted messages
             }
           });
 
+          const finalStatus =
+            isRelevant && (!isBurst || (acceptedIds.size > 0))
+              ? 'COMPLETED_RELEVANT'
+              : 'COMPLETED_IRRELEVANT';
           const durationMs = Math.round(performance.now() - startTime);
 
           // Privacy-safe telemetry log (AD-11 / AC 12)

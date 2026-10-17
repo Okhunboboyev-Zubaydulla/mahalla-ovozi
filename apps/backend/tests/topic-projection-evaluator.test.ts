@@ -4,6 +4,7 @@ import {
   TopicProjectionResultSchema,
   TOPIC_PROJECTION_SYSTEM_PROMPT,
   isUzbekCyrillic,
+  sanitizeUngroundedHokimSummary,
   type TopicProjectionResult,
 } from '../src/modules/topics/topic-projection-evaluator.js';
 import type { AiGatewayPort } from '../src/modules/ai/ai-gateway.js';
@@ -956,10 +957,16 @@ describe('Story 2.5: Topic Projection Contracts & Evaluator Unit Tests', () => {
       expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('...мурожаат қайд этилди');
     });
 
-    it('ensures system prompt defines causal grounding for HOKIM_RELATED summaries', () => {
+    it('ensures system prompt defines causal grounding and negative exclusions for HOKIM_RELATED summaries', () => {
       expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('HOKIM_RELATED (CAUSAL GROUNDING)');
-      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('мутасаддилар эътиборсизлиги юзасидан ҳокимликка эътироз билдирилгани хабар қилинмоқда');
+      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('ҳокимликка эътироз');
       expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('Ҳокимлик ва мутасадди идоралар фаолияти юзасидан эътироз билдирилгани хабар қилинмоқда');
+      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('NEGATIVE EXCLUSIONS');
+      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('прокурор');
+      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('милиция');
+      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('пул йиғилган');
+      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).not.toContain('Фуқаро муаммо бошқа хонадонларда ҳам бор-йўқлигини суриштирди');
+      expect(TOPIC_PROJECTION_SYSTEM_PROMPT).toContain('return "latest_update": null instead of guessing or fabricating an inquiry');
     });
 
     it('projects HOKIM_RELATED topic grounded in water utility inaction rather than literal procedural inquiry', async () => {
@@ -1516,6 +1523,168 @@ describe('Story 2.5: Topic Projection Contracts & Evaluator Unit Tests', () => {
             profileId: 'prof_proj_2026_08_v1',
           }),
         ).rejects.toThrow('Latest update must contain authentic Uzbek Cyrillic characters');
+      });
+    });
+
+    describe('Milestone 3: Programmatic Hokim Guardrail & Grounding Tests', () => {
+      it('sanitizeUngroundedHokimSummary replaces ungrounded Hokim claims with grounded phrasing', () => {
+        expect(
+          sanitizeUngroundedHokimSummary(
+            'Сув таъминотидаги муаммо бўйича мутасаддилар эътиборсизлиги юзасидан ҳокимликка эътироз билдирилгани хабар қилинмоқда.',
+          ),
+        ).toBe('Сув таъминотидаги муаммо бўйича мутасаддиларга эътироз билдирилгани хабар қилинмоқда.');
+
+        expect(
+          sanitizeUngroundedHokimSummary(
+            'Газ таъминотидаги муаммо бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.',
+          ),
+        ).toBe('Газ таъминотидаги муаммо бўйича мутасаддиларга эътироз билдирилгани хабар қилинмоқда.');
+
+        expect(
+          sanitizeUngroundedHokimSummary(
+            'Ҳокимлик ва мутасадди идоралар фаолияти юзасидан эътироз билдирилгани хабар қилинмоқда.',
+          ),
+        ).toBe('Мутасадди идоралар фаолияти юзасидан эътироз билдирилгани хабар қилинмоқда.');
+      });
+
+      it('does NOT include HOKIM_RELATED and removes ungrounded Hokim claims when evidence mentions prosecutor without Hokim terms', async () => {
+        const snapshot: MahallaDailySnapshot = {
+          districtId: 'dist_tashkent_chilanzar',
+          mahallaName: 'Guliston',
+          calendarDay: '2026-10-15',
+          contextRevision: 1,
+          snapshotFingerprint: 'fp_prosecutor_gas',
+          evidence: [
+            {
+              id: 'evi_gas_pros_1',
+              topicId: 'top_gas_pros',
+              lane: 'GAS',
+              verbatimText: 'Gaz trubasi yorildi, prokuraturaga yozdik hech kim chora ko‘rmayapti',
+              originalTimestamp: '2026-10-15T09:00:00.000Z',
+              telegramMessageId: '501',
+            },
+            {
+              id: 'evi_gas_pros_2',
+              topicId: 'top_gas_pros',
+              lane: 'GAS',
+              verbatimText: 'Prokuror kelib ketdi, lekin gaz hali ham yo‘q',
+              originalTimestamp: '2026-10-15T09:30:00.000Z',
+              telegramMessageId: '502',
+            },
+          ],
+        };
+
+        // LLM hallucinates HOKIM_RELATED and puts "hokimlikka e'tiroz" into summary
+        const mockGateway = createMockAiGateway({
+          summary: 'Газ қувури ёрилиши бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.',
+          lanes: ['GAS', 'HOKIM_RELATED'],
+          anchor_evidence_id: 'evi_gas_pros_1',
+          anchor_quote: 'Gaz trubasi yorildi',
+          latest_meaningful_activity_timestamp: '2026-10-15T09:30:00.000Z',
+          attribution: 'Маҳалла аҳолиси',
+          is_hokim_related: true,
+        });
+
+        const evaluator = new TopicProjectionEvaluator(mockGateway);
+        const result = await evaluator.evaluateTopicProjection({
+          topicId: 'top_gas_pros',
+          primaryLane: 'GAS',
+          generation: 1,
+          snapshot,
+        });
+
+        // Programmatic guardrail strips HOKIM_RELATED because no evidence contains explicit Hokim terms
+        expect(result.lanes).toEqual(['GAS']);
+        expect(result.isHokimRelated).toBe(false);
+        // Summary is sanitized so it does NOT claim "ҳокимликка эътироз"
+        expect(result.summary).not.toContain('ҳокимликка эътироз');
+        expect(result.summary).not.toContain('ҳокимлик');
+        expect(result.summary).not.toContain('ҳоким');
+        expect(result.summary).toBe('Газ қувури ёрилиши бўйича мутасаддиларга эътироз билдирилгани хабар қилинмоқда.');
+      });
+
+      it('programmatic guardrail strips HOKIM_RELATED if LLM hallucinates it on utility outage without matching evidence terms', async () => {
+        const snapshot: MahallaDailySnapshot = {
+          districtId: 'dist_tashkent_chilanzar',
+          mahallaName: 'Guliston',
+          calendarDay: '2026-10-15',
+          contextRevision: 1,
+          snapshotFingerprint: 'fp_water_hallucination',
+          evidence: [
+            {
+              id: 'evi_water_1',
+              topicId: 'top_water_1',
+              lane: 'WATER',
+              verbatimText: 'Suv ertalabdan beri yo‘q, kranlar quruq',
+              originalTimestamp: '2026-10-15T11:00:00.000Z',
+              telegramMessageId: '601',
+            },
+          ],
+        };
+
+        const mockGateway = createMockAiGateway({
+          summary: 'Сув таъминотидаги муаммо бўйича мутасаддилар эътиборсизлиги юзасидан ҳокимликка эътироз билдирилгани хабар қилинмоқда.',
+          lanes: ['WATER', 'HOKIM_RELATED'],
+          anchor_evidence_id: 'evi_water_1',
+          anchor_quote: 'Suv ertalabdan beri yo‘q',
+          latest_meaningful_activity_timestamp: '2026-10-15T11:00:00.000Z',
+          attribution: 'Маҳалла фуқароси',
+          is_hokim_related: true,
+        });
+
+        const evaluator = new TopicProjectionEvaluator(mockGateway);
+        const result = await evaluator.evaluateTopicProjection({
+          topicId: 'top_water_1',
+          primaryLane: 'WATER',
+          generation: 1,
+          snapshot,
+        });
+
+        expect(result.lanes).toEqual(['WATER']);
+        expect(result.isHokimRelated).toBe(false);
+        expect(result.summary).toBe('Сув таъминотидаги муаммо бўйича мутасаддиларга эътироз билдирилгани хабар қилинмоқда.');
+      });
+
+      it('preserves HOKIM_RELATED when evidence genuinely contains explicit Hokim terms', async () => {
+        const snapshot: MahallaDailySnapshot = {
+          districtId: 'dist_tashkent_chilanzar',
+          mahallaName: 'Guliston',
+          calendarDay: '2026-10-15',
+          contextRevision: 1,
+          snapshotFingerprint: 'fp_genuine_hokim',
+          evidence: [
+            {
+              id: 'evi_gen_1',
+              topicId: 'top_gen_gas',
+              lane: 'GAS',
+              verbatimText: 'Tuman hokimiga murojaat qildik, gaz bosimi juda past',
+              originalTimestamp: '2026-10-15T12:00:00.000Z',
+              telegramMessageId: '701',
+            },
+          ],
+        };
+
+        const mockGateway = createMockAiGateway({
+          summary: 'Газ таъминоти бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.',
+          lanes: ['GAS', 'HOKIM_RELATED'],
+          anchor_evidence_id: 'evi_gen_1',
+          anchor_quote: 'Tuman hokimiga murojaat qildik',
+          latest_meaningful_activity_timestamp: '2026-10-15T12:00:00.000Z',
+          attribution: 'Маҳалла фуқароси',
+          is_hokim_related: true,
+        });
+
+        const evaluator = new TopicProjectionEvaluator(mockGateway);
+        const result = await evaluator.evaluateTopicProjection({
+          topicId: 'top_gen_gas',
+          primaryLane: 'GAS',
+          generation: 1,
+          snapshot,
+        });
+
+        expect(result.lanes).toEqual(['GAS', 'HOKIM_RELATED']);
+        expect(result.isHokimRelated).toBe(true);
+        expect(result.summary).toBe('Газ таъминоти бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.');
       });
     });
   });

@@ -873,6 +873,90 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
     expect((rec2!.rawPayload as any).exclusionReason).toBe('GENERAL_CHATTER');
   });
 
+  it('Matrix #26b: Burst debounce does NOT fall back to accepting all burst messages when accepted_message_ids excludes chatter', async () => {
+    aiController.mockAdapter.setNextResponse({
+      is_relevant: true,
+      relevant_lanes: ['WATER'],
+      exclusion_reason: null,
+      accepted_message_ids: ['201'],
+      reasoning: 'Water outage accepted; message 202 is price inquiry chatter and excluded',
+    });
+
+    const intake1 = await createTestIntake("Suv to'xtab qoldi", '201');
+    const intake2 = await createTestIntake('Qanchayakan', '202');
+
+    const jobData: TelegramSemanticRelevanceJobData = {
+      intakeId: intake1,
+      districtId: testDistrictId,
+      mahallaName: 'Guliston',
+      calendarDay: '2026-08-22',
+      telegramChatId: testChatId,
+      telegramMessageId: '201',
+      originalTimestamp: '2026-08-22T09:10:00.000Z',
+      contentType: 'TEXT',
+      verbatimText: "Suv to'xtab qoldi",
+      replyMetadata: null,
+      burstMessages: [
+        {
+          intakeId: intake1,
+          telegramMessageId: '201',
+          verbatimText: "Suv to'xtab qoldi",
+          originalTimestamp: '2026-08-22T09:10:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+        },
+        {
+          intakeId: intake2,
+          telegramMessageId: '202',
+          verbatimText: 'Qanchayakan',
+          originalTimestamp: '2026-08-22T09:10:05.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+        },
+      ],
+    };
+
+    await boss.send(TELEGRAM_SEMANTIC_RELEVANCE_QUEUE, jobData);
+
+    const op1 = await waitForOperation(intake1);
+    expect(op1).toBeDefined();
+    expect(op1.finalStatus).toBe('COMPLETED_RELEVANT');
+
+    const op2 = await waitForOperation(intake2);
+    expect(op2).toBeDefined();
+    expect(op2.finalStatus).toBe('COMPLETED_IRRELEVANT');
+
+    // Verify intake2 rawPayload has status EXCLUDED with GENERAL_CHATTER
+    const [rec2] = await db
+      .select()
+      .from(telegramIntakeRecords)
+      .where(eq(telegramIntakeRecords.id, intake2));
+    expect(rec2).toBeDefined();
+    expect((rec2!.rawPayload as any).status).toBe('EXCLUDED');
+    expect((rec2!.rawPayload as any).exclusionReason).toBe('GENERAL_CHATTER');
+
+    // Verify downstream topic assignment job only includes intake1 in burstMessages
+    let receivedTopicJob: PgBoss.Job<TelegramTopicAssignmentJobData> | null = null;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const jobs = await boss.fetch<TelegramTopicAssignmentJobData>(TELEGRAM_TOPIC_ASSIGNMENT_QUEUE, {
+        batchSize: 10,
+      });
+      if (jobs && jobs.length > 0) {
+        const match = jobs.find((j) => j.data.intakeId === intake1);
+        if (match) {
+          receivedTopicJob = match;
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    expect(receivedTopicJob).not.toBeNull();
+    expect(receivedTopicJob?.data.telegramMessageId).toBe('201');
+    expect(receivedTopicJob?.data.burstMessages).toHaveLength(1);
+    expect(receivedTopicJob?.data.burstMessages![0]!.telegramMessageId).toBe('201');
+  });
+
   it('Deterministic Fast-Fail Gate: excludes replies to non-civic excluded parents without calling AI gateway', async () => {
     aiController.mockAdapter.clearHistory();
 

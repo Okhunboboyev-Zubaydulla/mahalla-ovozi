@@ -25,7 +25,8 @@
     "cli:reencrypt-userbot": "node --env-file-if-exists=.env --import tsx/esm src/cli/reencrypt-userbot-sessions.ts",
     "cli:backfill-api-hash": "node --env-file-if-exists=.env --import tsx/esm src/cli/backfill-encrypted-api-hash.ts",
     "cli:verify-api-hash-envelopes": "node --env-file-if-exists=.env --import tsx/esm src/cli/verify-api-hash-envelopes.ts",
-    "reconcile-restore": "node --env-file-if-exists=.env --import tsx/esm src/entrypoints/reconcile-restore.ts"
+    "reconcile-restore": "node --env-file-if-exists=.env --import tsx/esm src/entrypoints/reconcile-restore.ts",
+    "remediate:false-positives": "node --env-file-if-exists=.env --import tsx/esm src/scripts/remediate-false-positive-evidence.ts"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.0",

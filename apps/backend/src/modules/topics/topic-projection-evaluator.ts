@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   QualifyingLaneSchema,
   type QualifyingLane,
+  DEFAULT_HOKIM_RECOGNITION_TERMS,
 } from '@mahalla-ovozi/api-contracts';
 import type { AiGatewayPort } from '../ai/ai-gateway.js';
 import {
@@ -11,6 +12,7 @@ import {
 } from '../ai/context-snapshot.js';
 import { AiGatewayError, type AiGatewayResult } from '../ai/types.js';
 import { computeLevenshteinDistance } from './topic-matching-resolver.js';
+import { buildHokimTermsRegex } from './topic-evidence-service.js';
 
 export const QualifyingLaneEnum = QualifyingLaneSchema;
 export { type QualifyingLane };
@@ -51,6 +53,52 @@ export function isUzbekCyrillic(text: string): boolean {
     return cyrillicMatches.length > 0;
   }
   return cyrillicMatches.length / alphabeticMatches.length >= 0.7;
+}
+
+/**
+ * Sanitizes ungrounded claims mentioning Hokim/Hokimiyat from a topic summary
+ * when no evidence matches explicit Hokim recognition terms.
+ * Replaces fabricated complaints against Hokimiyat with grounded phrasing towards municipal/utility authorities.
+ */
+export function sanitizeUngroundedHokimSummary(summary: string): string {
+  let sanitized = summary;
+  // 1. Remove redundant "мутасаддилар эътиборсизлиги юзасидан ҳокимликка эътироз билдирилгани"
+  sanitized = sanitized.replace(
+    /мутасаддилар\s+эътиборсизлиги\s+юзасидан\s+[ҳхh]окимликка\s+эътироз\s+билдирилгани/giu,
+    'мутасаддиларга эътироз билдирилгани',
+  );
+  // 2. Replace "ҳокимликка эътироз билдирилгани" with "мутасаддиларга эътироз билдирилгани"
+  sanitized = sanitized.replace(
+    /[ҳхh]окимликка\s+эътироз\s+билдирилгани/giu,
+    'мутасаддиларга эътироз билдирилгани',
+  );
+  // 3. Replace "ҳокимликка эътироз" with "мутасаддиларга эътироз"
+  sanitized = sanitized.replace(
+    /[ҳхh]окимликка\s+эътироз/giu,
+    'мутасаддиларга эътироз',
+  );
+  // 4. Replace "Ҳокимлик ва мутасадди идоралар" with "Мутасадди идоралар"
+  sanitized = sanitized.replace(
+    /^[ҳхh]окимлик\s+ва\s+мутасадди/giu,
+    'Мутасадди',
+  );
+  sanitized = sanitized.replace(
+    /[ҳхh]окимлик\s+ва\s+мутасадди/giu,
+    'мутасадди',
+  );
+  // 5. Replace remaining "ҳокимликка" -> "мутасаддиларга"
+  sanitized = sanitized.replace(/[ҳхh]окимликка|[hx]okimlikka/giu, 'мутасаддиларга');
+  // 6. Replace remaining "ҳокимлик" -> "мутасадди идоралар"
+  sanitized = sanitized.replace(/[ҳхh]окимлик|[hx]okimlik/giu, 'мутасадди идоралар');
+  // 7. Replace "ҳокимга" -> "мутасаддиларга"
+  sanitized = sanitized.replace(/[ҳхh]окимга|[hx]okimga/giu, 'мутасаддиларга');
+  // 8. Replace "ҳоким" -> "мутасаддилар"
+  sanitized = sanitized.replace(/[ҳхh]оким|[hx]okim/giu, 'мутасаддилар');
+
+  if (sanitized.length > 0) {
+    sanitized = sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
+  }
+  return sanitized;
 }
 
 export const TopicProjectionResultSchema = z.preprocess(
@@ -214,10 +262,12 @@ PART I: CORE PROJECTION PRINCIPLES & GUARDRAILS
     - GAS: "Газ таъминотида узилиш ёки босим пастлиги хабар қилинмоқда."
     - WASTE: "Чиқиндилар олиб кетилмагани хабар қилинмоқда."
     - HOKIM_RELATED (CAUSAL GROUNDING):
-      - If the escalation/complaint stems from an unaddressed utility/infrastructure disruption or utility inaction (e.g. water, electricity, gas, waste, road) present in the target evidence or same-day Mahalla context:
-        Concise template: "[Муаммо соҳаси] бўйича мутасаддилар эътиборсизлиги юзасидан ҳокимликка эътироз билдирилгани хабар қилинмоқда."
-        (e.g., "Сув таъминотидаги муаммо бўйича мутасаддилар эътиборсизлиги юзасидан ҳокимликка эътироз билдирилгани хабар қилинмоқда.", or road: "Йўл таъмири бўйича мутасаддилар эътиборсизлиги юзасидан ҳокимликка эътироз билдирилгани хабар қилинмоқда.")
-      - If no specific utility breakdown exists anywhere in context (pure general governance complaint):
+      - ONLY state that an objection was lodged to the Hokimiyat ("ҳокимликка эътироз") if the underlying evidence explicitly names the Hokim or Hokimiyat.
+      - If the evidence explicitly mentions the Hokim or Hokimiyat in connection with an unaddressed utility/infrastructure disruption (e.g. water, electricity, gas, waste, road):
+        Concise template: "[Муаммо соҳаси] бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда."
+        (e.g., "Сув таъминотидаги муаммо бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.", "Йўл таъмири бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.")
+      - If the escalation stems from general utility inaction or unaddressed infrastructure issues without explicitly naming the Hokim or Hokimiyat, summarize the utility disruption/complaint directly (e.g. "[Муаммо соҳаси] бўйича муаммо ҳал этилмаётганидан норозилик хабар қилинмоқда") without fabricating a complaint to the Hokimiyat.
+      - If no specific utility breakdown exists anywhere in context (pure general governance complaint explicitly naming the Hokim or Hokimiyat):
         Concise template: "Ҳокимлик ва мутасадди идоралар фаолияти юзасидан эътироз билдирилгани хабар қилинмоқда."
 
 - LOCATION & LANDMARK POLICY (HIGH-LEVEL OUTAGES VS. ACUTE POINT HAZARDS):
@@ -251,6 +301,7 @@ PART I: CORE PROJECTION PRINCIPLES & GUARDRAILS
   - Include HOKIM_RELATED if and only if at least one evidence item in the topic explicitly contains designated Hokim/Hokimiyat terms (including root terms "hokim", "hokimiyat", "hokimlik"; slang/typos/dialect "xokim", "hakim", "xakim", "hokimyat", "xokimyat", "hokimat", "xokimat", "hokim buva", "hokimbobo", "hokimimiz"; or apparatus officials "zamhokim", "hokim yordamchisi") OR is a direct contextual reply/burst continuation of such an appeal.
   - Road defects, mud, or unpaved street issues without explicit Hokim/Hokimiyat mentions must NEVER derive HOKIM_RELATED.
   - "mahalla raisi" or "oqsoqol" alone does NOT qualify for HOKIM_RELATED unless "hokim" or "hokimiyat" is explicitly named.
+  - NEGATIVE EXCLUSIONS: Appeals, requests for supervision, or reports directed to the Prosecutor / Prokuratura ("прокурор", "прокуратура", "prokuror", "prokuratura"), Police / IIB ("милиция", "ИИБ", "militsiya", "IIB"), Courts ("суд", "sud"), or neighborhood activists/fundraising ("пул йиғилган", "тўлқин ака йиққан", "pul yig'ilgan") MUST NEVER be assigned HOKIM_RELATED in lanes unless the Hokim or Hokimiyat is explicitly and directly named alongside them.
 
 ### 4. ANCHOR SELECTION & AUTHORITATIVE QUOTE (FOUNDATIONAL GENESIS & SELF-CONTAINED PRINCIPLE)
 - The Anchor Evidence MUST be the foundational citizen report that established the Topic card, or the earliest self-contained report describing the disruption.
@@ -308,7 +359,8 @@ These empirical learnings guide accurate translation of colloquial Telegram comp
        - CRITICAL AUTHOR CONTINUITY INVARIANT:
          * SAME CITIZEN CONTINUATION: If the latest message is from the SAME citizen as the preceding message (marked as "Same citizen", e.g. Citizen #1 adding details, asking follow-up questions like "yoki bizdami faqat", or continuing their sentence), you MUST NEVER describe it as a new citizen or corroboration!
            STRICTLY FORBIDDEN: "Яна бир фуқаро узилишни тасдиқлади", "Бошқа фуқаро тасдиқлади", "Яна бир фуқаро қўшилди".
-           Instead, synthesize what that same resident added, asked, or clarified (e.g. "Фуқаро муаммо бошқа хонадонларда ҳам бор-йўқлигини суриштирди", "Фуқаро хабарига қўшимча изоҳ берди", "Фуқаро вазият юзасидан қайта мурожаат қилди").
+           Instead, synthesize what that same resident added, asked, or clarified (e.g. "Фуқаро хабарига қўшимча изоҳ берди", "Фуқаро вазият юзасидан қайта мурожаат қилди").
+           If the latest message does not add a meaningful substantive update, inquiry, or detail regarding the disruption, return "latest_update": null instead of guessing or fabricating an inquiry.
          * DISTINCT CITIZEN CORROBORATION: ONLY when the latest message is sent by a DIFFERENT citizen (different Citizen # index, e.g. Citizen #2 replying "+1", "bizda ham o'chdi", "ha to'g'ri"), synthesize it as corroboration from another resident (e.g. "Яна бир фуқаро узилишни тасдиқлади", "Бошқа бир фуқаро ҳам таъминот йўқлигини маълум қилди", "Аҳоли муаммо ҳали ҳам бартараф этилмаганини таъкидлади").
   - NEVER output conversational chat chatter, Latin/slang verbatim quotes, or bureaucratic filler in latest_update.
 
@@ -568,6 +620,25 @@ ${otherSections.join('\n\n')}`);
         'INVALID_OUTPUT_SEMANTICS',
         `Derived lanes [${data.lanes.join(', ')}] must include target topic's immutable primary lane "${input.primaryLane}"`,
       );
+    }
+
+    // Programmatic Hokim Guardrail (Code Defense-in-Depth)
+    if (input.primaryLane !== 'HOKIM_RELATED') {
+      const isDerivedHokim = data.lanes.includes('HOKIM_RELATED');
+      const hasHokimInSummary = /[ҳхh]оким|[hx]okim/iu.test(data.summary);
+      if (isDerivedHokim || hasHokimInSummary) {
+        const hokimRegex = buildHokimTermsRegex(DEFAULT_HOKIM_RECOGNITION_TERMS);
+        const hasHokimMatch = targetEvidence.some((item) => hokimRegex.test(item.verbatimText));
+        if (!hasHokimMatch) {
+          if (isDerivedHokim) {
+            data.lanes = data.lanes.filter((lane) => lane !== 'HOKIM_RELATED');
+            data.is_hokim_related = false;
+          }
+          if (hasHokimInSummary) {
+            data.summary = sanitizeUngroundedHokimSummary(data.summary);
+          }
+        }
+      }
     }
 
     // Guardrail 4: summary must contain authentic Uzbek Cyrillic text

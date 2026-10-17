@@ -3168,6 +3168,129 @@ describe('Semantic Relevance Domain Evaluator & Contracts Unit Tests', () => {
           expect(result.data.exclusion_reason).toBe('GENERAL_CHATTER');
           expect(result.data.relevant_lanes).toHaveLength(0);
         });
+
+        it('evaluates informal street vendor chatter without utility failure as EXCLUDED (GENERAL_CHATTER)', async () => {
+          mockAdapter.setNextResponse({
+            is_relevant: false,
+            relevant_lanes: [],
+            exclusion_reason: 'GENERAL_CHATTER',
+            accepted_message_ids: [],
+            reasoning: 'Casual bystander directions mentioning street vendors without active utility failure predicate.',
+          });
+
+          const snapshot: MahallaDailySnapshot = {
+            districtId: 'dist_act_123',
+            mahallaName: 'Navbahor',
+            calendarDay: '2026-09-15',
+            contextRevision: 0,
+            snapshotFingerprint: 'fp_vendor_chatter',
+            evidence: [],
+          };
+
+          const result = await evaluator.evaluateRelevance({
+            candidateText: 'stansada nos sotayotganlar atrofiga borsez shu atrofda',
+            telegramMessageId: '505',
+            originalTimestamp: '2026-09-15T14:35:00.000Z',
+            contentType: 'TEXT',
+            replyMetadata: null,
+            snapshot,
+            profileId: 'prof_rel_2026_08_v1',
+          });
+
+          expect(result.data.is_relevant).toBe(false);
+          expect(result.data.exclusion_reason).toBe('GENERAL_CHATTER');
+          expect(result.data.relevant_lanes).toHaveLength(0);
+        });
+
+        it('evaluates prosecutor inquiry lacking Hokim mention as EXCLUDED (GENERAL_CHATTER)', async () => {
+          mockAdapter.setNextResponse({
+            is_relevant: false,
+            relevant_lanes: [],
+            exclusion_reason: 'GENERAL_CHATTER',
+            accepted_message_ids: [],
+            reasoning: 'Complaint directed to Prosecutor without explicit Hokim mention and lacking utility failure.',
+          });
+
+          const snapshot: MahallaDailySnapshot = {
+            districtId: 'dist_act_123',
+            mahallaName: 'Navbahor',
+            calendarDay: '2026-09-15',
+            contextRevision: 0,
+            snapshotFingerprint: 'fp_prosecutor_chatter',
+            evidence: [],
+          };
+
+          const result = await evaluator.evaluateRelevance({
+            candidateText: 'Бу бўйича прокуратурага ёзиш керак, текширишсин',
+            telegramMessageId: '506',
+            originalTimestamp: '2026-09-15T14:40:00.000Z',
+            contentType: 'TEXT',
+            replyMetadata: null,
+            snapshot,
+            profileId: 'prof_rel_2026_08_v1',
+          });
+
+          expect(result.data.is_relevant).toBe(false);
+          expect(result.data.exclusion_reason).toBe('GENERAL_CHATTER');
+          expect(result.data.relevant_lanes).toHaveLength(0);
+        });
+
+        it('evaluates informal neighborhood money collection dispute as EXCLUDED (GENERAL_CHATTER)', async () => {
+          mockAdapter.setNextResponse({
+            is_relevant: false,
+            relevant_lanes: [],
+            exclusion_reason: 'GENERAL_CHATTER',
+            accepted_message_ids: [],
+            reasoning: 'Self-organized money collection dispute is a private neighborhood matter, not a Hokim complaint.',
+          });
+
+          const snapshot: MahallaDailySnapshot = {
+            districtId: 'dist_act_123',
+            mahallaName: 'Navbahor',
+            calendarDay: '2026-09-15',
+            contextRevision: 0,
+            snapshotFingerprint: 'fp_fundraising_chatter',
+            evidence: [],
+          };
+
+          const result = await evaluator.evaluateRelevance({
+            candidateText: 'Тўлқин ака йиққан пулни қайтариб беришсин, пул йиғилган эди',
+            telegramMessageId: '507',
+            originalTimestamp: '2026-09-15T14:45:00.000Z',
+            contentType: 'TEXT',
+            replyMetadata: null,
+            snapshot,
+            profileId: 'prof_rel_2026_08_v1',
+          });
+
+          expect(result.data.is_relevant).toBe(false);
+          expect(result.data.exclusion_reason).toBe('GENERAL_CHATTER');
+          expect(result.data.relevant_lanes).toHaveLength(0);
+        });
+
+        it('verifies prompt hardening invariants in SEMANTIC_RELEVANCE_SYSTEM_PROMPT', () => {
+          // Section 16.1 Substantive Meaning Gate
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('SUBSTANTIVE MEANING GATE');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('DO NOT blindly accept a message simply because it was posted immediately after an issue report');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('Direct status confirmation / corroboration');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('Timely municipal inquiry');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('Factual clarification of the municipal problem');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('qanchayakan');
+
+          // Section 3 & 5 Law Enforcement & Prosecutor Negative Boundary
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('LAW ENFORCEMENT, PROSECUTOR & JUDICIAL NEGATIVE BOUNDARY');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('прокурор');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('милиция');
+
+          // Section 3 & 5 Neighborhood Money Collections
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('NEIGHBORHOOD MONEY COLLECTIONS & ACTIVIST DISPUTES EXCLUSION');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('пул йиғилган');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('тўлқин ака йиққан');
+
+          // Section 12 Informal Street Vendors & Transit Landmarks
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('INFORMAL STREET VENDOR & TRANSIT LANDMARKS');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('nos sotayotganlar');
+        });
       });
     });
   });
