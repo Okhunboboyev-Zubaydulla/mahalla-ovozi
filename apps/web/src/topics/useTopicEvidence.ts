@@ -42,7 +42,7 @@ export function useTopicEvidence(
   const districtId = actor?.districtId || '';
   const queryClient = useQueryClient();
 
-  const order = options?.order ?? 'ASC';
+  const order = options?.order ?? 'DESC';
   const queryKey = ['topic-evidence', districtId, topicId || '', order];
   const configuredRetry = queryClient.getDefaultOptions().queries?.retry;
   const effectiveRetry = typeof configuredRetry === 'number' ? configuredRetry : 2;

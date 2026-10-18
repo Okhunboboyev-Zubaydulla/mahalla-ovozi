@@ -63,7 +63,7 @@ describe('Story 3.3: useTopicEvidence Synchronization & Invalidation Tests', () 
     );
   };
 
-  it('Test 1: Merges newly arrived evidence items and orders oldest-to-newest (AC 5)', async () => {
+  it('Test 1: Merges newly arrived evidence items and defaults to newest-first ordering (AC 5)', async () => {
     const evidenceOlder: TopicEvidenceItem = {
       id: 'evi_1',
       topicId: 'top_100',
@@ -103,7 +103,9 @@ describe('Story 3.3: useTopicEvidence Synchronization & Invalidation Tests', () 
       hasNextPage: false,
     };
 
-    vi.spyOn(hokimTopicsClient, 'getTopicEvidence').mockResolvedValueOnce(mockEvidenceResponse);
+    const getSpy = vi
+      .spyOn(hokimTopicsClient, 'getTopicEvidence')
+      .mockResolvedValue(mockEvidenceResponse);
 
     const { result } = renderHook(() => useTopicEvidence('top_100'), {
       wrapper: createWrapper(),
@@ -112,9 +114,30 @@ describe('Story 3.3: useTopicEvidence Synchronization & Invalidation Tests', () 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(result.current.evidenceList.length).toBe(2);
-    // Oldest first
-    expect(result.current.evidenceList[0]?.id).toBe('evi_1');
-    expect(result.current.evidenceList[1]?.id).toBe('evi_2');
+    // Default order is newest-first
+    expect(getSpy).toHaveBeenCalledWith(
+      'top_100',
+      expect.objectContaining({ order: 'DESC' }),
+      expect.any(AbortSignal),
+    );
+    expect(result.current.evidenceList[0]?.id).toBe('evi_2');
+    expect(result.current.evidenceList[1]?.id).toBe('evi_1');
+
+    // Explicit order=ASC still yields the oldest-to-newest sequence
+    const { result: ascResult } = renderHook(
+      () => useTopicEvidence('top_100', { order: 'ASC' }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(ascResult.current.isLoading).toBe(false));
+
+    expect(getSpy).toHaveBeenCalledWith(
+      'top_100',
+      expect.objectContaining({ order: 'ASC' }),
+      expect.any(AbortSignal),
+    );
+    expect(ascResult.current.evidenceList[0]?.id).toBe('evi_1');
+    expect(ascResult.current.evidenceList[1]?.id).toBe('evi_2');
   });
 
   it('Test 2: Intercepts 404 TopicNotFoundError, sets isInvalidated and triggers onInvalidated callback (AC 5)', async () => {

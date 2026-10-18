@@ -380,16 +380,35 @@ describe('Story 3.2: Inspect Complete Topic Evidence Integration Tests', () => {
     expect(body.hasNextPage).toBe(false);
     expect(body.nextCursor).toBeNull();
 
-    // Verify chronological oldest-to-newest ordering
-    expect(body.evidence[0]!.telegramDeepLink).toBe('https://t.me/bobur_mahalla_public/101');
-    expect(body.evidence[0]!.verbatimText).toContain('1-хабар:\nИчимлик суви босими пастлаб кетди.');
+    // Default order is newest-first: evidence[0] is the latest message
+    expect(body.evidence[0]!.verbatimText).toContain('5-хабар:\nСув таъминоти тўхтатилди');
     expect(body.evidence[0]!.formattedTime).toMatch(/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/);
-    // UTC 06:00 is Tashkent 11:00 (+5)
-    expect(body.evidence[0]!.formattedTime).toContain('11:00');
-
-    expect(body.evidence[4]!.verbatimText).toContain('5-хабар:\nСув таъминоти тўхтатилди');
     // UTC 10:00 is Tashkent 15:00 (+5)
-    expect(body.evidence[4]!.formattedTime).toContain('15:00');
+    expect(body.evidence[0]!.formattedTime).toContain('15:00');
+
+    expect(body.evidence[4]!.verbatimText).toContain('1-хабар:\nИчимлик суви босими пастлаб кетди.');
+    // UTC 06:00 is Tashkent 11:00 (+5)
+    expect(body.evidence[4]!.formattedTime).toContain('11:00');
+
+    // Explicit order=ASC still returns the chronological oldest-to-newest sequence
+    const ascRes = await server.inject({
+      method: 'GET',
+      url: `/api/v1/hokim/topics/${topicA1Id}/evidence?order=ASC`,
+      headers: {
+        ...SAME_ORIGIN_HEADERS,
+        cookie: hokimACookie,
+      },
+    });
+
+    expect(ascRes.statusCode).toBe(200);
+    const ascBody: TopicEvidenceResponse = JSON.parse(ascRes.body);
+
+    expect(ascBody.evidence[0]!.telegramDeepLink).toBe('https://t.me/bobur_mahalla_public/101');
+    expect(ascBody.evidence[0]!.verbatimText).toContain('1-хабар:\nИчимлик суви босими пастлаб кетди.');
+    expect(ascBody.evidence[0]!.formattedTime).toMatch(/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/);
+    expect(ascBody.evidence[0]!.formattedTime).toContain('11:00');
+    expect(ascBody.evidence[4]!.verbatimText).toContain('5-хабар:\nСув таъминоти тўхтатилди');
+    expect(ascBody.evidence[4]!.formattedTime).toContain('15:00');
   });
 
   it('correctly identifies anchor evidence and anchor quote (AC 9)', async () => {
@@ -557,7 +576,8 @@ describe('Story 3.2: Inspect Complete Topic Evidence Integration Tests', () => {
   it('strictly sanitizes sender attribution and excludes citizen phone numbers or private IDs (AC 5, AD-11)', async () => {
     const res = await server.inject({
       method: 'GET',
-      url: `/api/v1/hokim/topics/${topicA1Id}/evidence`,
+      // Explicit ASC keeps the oldest-to-newest index mapping asserted below
+      url: `/api/v1/hokim/topics/${topicA1Id}/evidence?order=ASC`,
       headers: {
         ...SAME_ORIGIN_HEADERS,
         cookie: hokimACookie,
@@ -596,10 +616,11 @@ describe('Story 3.2: Inspect Complete Topic Evidence Integration Tests', () => {
     expect(item5.authorUsername).toBe('@sarvar_reporter');
   });
 
-  it('resolves 3-tier Telegram deep links safely (AC 6)', async () => {
+  it('resolves 3-tier Telegram deep links safely in chronological order=ASC (AC 6)', async () => {
     const res = await server.inject({
       method: 'GET',
-      url: `/api/v1/hokim/topics/${topicA1Id}/evidence`,
+      // Explicit ASC keeps the oldest-to-newest index mapping asserted below
+      url: `/api/v1/hokim/topics/${topicA1Id}/evidence?order=ASC`,
       headers: {
         ...SAME_ORIGIN_HEADERS,
         cookie: hokimACookie,

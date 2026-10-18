@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
 import { Drawer, Typography, Tag, Space, Skeleton, Button, Alert, Segmented } from 'antd';
 import {
   CloseOutlined,
@@ -43,7 +43,7 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
 
-  const [order, setOrder] = useState<'ASC' | 'DESC'>('ASC');
+  const [order, setOrder] = useState<'ASC' | 'DESC'>('DESC');
 
   const {
     topic,
@@ -135,6 +135,37 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
     }, 50);
     return () => clearTimeout(timer);
   }, [topicId]);
+
+  // Scroll anchoring (DESC only): hold the message the user is reading still when
+  // auto-poll inserts newer messages above it. The baseline records the last handled
+  // scrollHeight plus the view it belongs to, so a deliberate scroll reset (topic or
+  // order change) and the floating jump-to-latest both re-baseline instead of shifting.
+  const anchorViewKey = `${topicId ?? ''}:${order}`;
+  const scrollAnchorRef = useRef<{ viewKey: string; scrollHeight: number }>({
+    viewKey: '',
+    scrollHeight: 0,
+  });
+
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const currentHeight = container.scrollHeight;
+    const previousAnchor = scrollAnchorRef.current;
+    scrollAnchorRef.current = { viewKey: anchorViewKey, scrollHeight: currentHeight };
+
+    const isSameView = previousAnchor.viewKey === anchorViewKey;
+    const isNearTop = container.scrollTop <= 32;
+    if (order !== 'DESC' || !isSameView || isNearTop) {
+      return;
+    }
+
+    const growth = currentHeight - previousAnchor.scrollHeight;
+    if (growth > 0) {
+      container.scrollTop += growth;
+    }
+  }, [anchorViewKey, order, evidenceList]);
 
   // Keyboard Escape listener to close drawer and restore focus (AC 7)
   useEffect(() => {
@@ -449,8 +480,8 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
                 value={order}
                 onChange={handleOrderChange}
                 options={[
-                  { label: 'Эскилари олдин', value: 'ASC' },
                   { label: 'Янгилари олдин', value: 'DESC' },
+                  { label: 'Эскилари олдин', value: 'ASC' },
                 ]}
                 style={{
                   fontSize: 12,

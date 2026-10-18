@@ -206,7 +206,7 @@ export async function getTopicEvidence(
 ): Promise<TopicEvidenceResponse> {
 
   // 1. Build Keyset Cursor Predicate (Bidirectional: ASC or DESC)
-  const order = query.order ?? 'ASC';
+  const order = query.order ?? 'DESC';
   let cursorPredicate = sql``;
   if (query.cursor) {
     const decoded = decodeEvidenceKeysetCursor(query.cursor);

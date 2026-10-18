@@ -163,9 +163,15 @@ describe('TopicEvidenceDrawer Component Tests', () => {
     // Verify standalone anchor quote callout was removed from drawer body (AC 9 updated)
     expect(screen.queryByText('Дастлабки хабар иқтибоси:')).toBeNull();
 
-    // Verify order segmented control
-    expect(screen.getByText('Эскилари олдин')).toBeTruthy();
-    expect(screen.getByText('Янгилари олдин')).toBeTruthy();
+    // Verify order segmented control: newest-first is listed first (left) and is the default
+    const newestFirstOption = screen.getByText('Янгилари олдин');
+    const oldestFirstOption = screen.getByText('Эскилари олдин');
+    expect(newestFirstOption).toBeTruthy();
+    expect(oldestFirstOption).toBeTruthy();
+    expect(
+      newestFirstOption.compareDocumentPosition(oldestFirstOption) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     // Verify evidence items
     expect(screen.getByText('1-хабар: Сув босими пасайди.')).toBeTruthy();
@@ -177,8 +183,9 @@ describe('TopicEvidenceDrawer Component Tests', () => {
     // Verify Telegram link buttons
     const telegramLinks = screen.getAllByRole('link', { name: /Telegramда очиш/i });
     expect(telegramLinks.length).toBe(2);
-    expect(telegramLinks[0]?.getAttribute('href')).toBe('https://t.me/bobur_public/101');
-    expect(telegramLinks[1]?.getAttribute('href')).toBe('https://t.me/c/123456789/102');
+    // Default newest-first order renders evi_2 before evi_1
+    expect(telegramLinks[0]?.getAttribute('href')).toBe('https://t.me/c/123456789/102');
+    expect(telegramLinks[1]?.getAttribute('href')).toBe('https://t.me/bobur_public/101');
   });
 
   it('calls onClose when close icon button is clicked (AC 7)', async () => {
@@ -370,7 +377,8 @@ describe('TopicEvidenceDrawer Component Tests', () => {
   });
 
   it('displays sticky evidence section header and toggles floating jump-to-latest button via IntersectionObserver', async () => {
-    vi.spyOn(hokimTopicsClient, 'getTopicEvidence').mockResolvedValueOnce(mockEvidenceResponse1);
+    // Resolves for both the default DESC query and the ASC query the toggle triggers
+    vi.spyOn(hokimTopicsClient, 'getTopicEvidence').mockResolvedValue(mockEvidenceResponse1);
 
     renderWithProviders(
       <TopicEvidenceDrawer topicId="top_1" onClose={vi.fn()} />,
@@ -399,31 +407,46 @@ describe('TopicEvidenceDrawer Component Tests', () => {
       expect(jumpBtn.style.pointerEvents).toBe('auto');
     });
 
-    // Mock scrollIntoView on sentinel and focus on the target item
-    const sentinel = document.getElementById('evidence-bottom-sentinel');
-    expect(sentinel).toBeTruthy();
-    if (sentinel) {
-      sentinel.scrollIntoView = vi.fn();
-    }
-    const targetItem = document.getElementById('evidence-item-evi_2');
-    if (targetItem) {
-      targetItem.focus = vi.fn();
-    }
+    // Default order is DESC: the button scrolls the container back to the top
+    const scrollContainer = header.parentElement as HTMLDivElement;
+    expect(scrollContainer).toBeTruthy();
+    const scrollToSpy = vi.fn();
+    scrollContainer.scrollTo = scrollToSpy;
+
+    const latestItem = document.getElementById('evidence-item-evi_2');
+    expect(latestItem).toBeTruthy();
+    const focusSpy = vi.fn();
+    latestItem!.focus = focusSpy;
 
     fireEvent.click(jumpBtn);
 
-    if (sentinel) {
-      expect(sentinel.scrollIntoView).toHaveBeenCalledWith({
-        behavior: 'smooth',
-        block: 'end',
-      });
-    }
-    if (targetItem) {
-      expect(targetItem.focus).toHaveBeenCalledWith({ preventScroll: true });
-    }
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+
+    // Explicit ASC: the same button glides down to the bottom sentinel instead
+    fireEvent.click(screen.getByText('Эскилари олдин'));
+
+    const sentinel = document.getElementById('evidence-bottom-sentinel');
+    expect(sentinel).toBeTruthy();
+    const scrollIntoViewSpy = vi.fn();
+    sentinel!.scrollIntoView = scrollIntoViewSpy;
+
+    // In ASC the latest message sits at the bottom, so evi_2 is the focus target
+    const latestAscItem = document.getElementById('evidence-item-evi_2');
+    expect(latestAscItem).toBeTruthy();
+    const ascFocusSpy = vi.fn();
+    latestAscItem!.focus = ascFocusSpy;
+
+    fireEvent.click(jumpBtn);
+
+    expect(scrollIntoViewSpy).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      block: 'end',
+    });
+    expect(ascFocusSpy).toHaveBeenCalledWith({ preventScroll: true });
   });
 
-  it('toggles evidence order between ASC and DESC via segmented control', async () => {
+  it('defaults to DESC and toggles evidence order to ASC via segmented control', async () => {
     const getTopicEvidenceSpy = vi
       .spyOn(hokimTopicsClient, 'getTopicEvidence')
       .mockResolvedValue(mockEvidenceResponse1);
@@ -435,22 +458,37 @@ describe('TopicEvidenceDrawer Component Tests', () => {
       expect(screen.getByText('Бобур маҳалласи')).toBeTruthy();
     });
 
+    // Newest-first is the default
     expect(getTopicEvidenceSpy).toHaveBeenCalledWith(
       'top_1',
-      expect.objectContaining({ order: 'ASC' }),
+      expect.objectContaining({ order: 'DESC' }),
       expect.any(AbortSignal),
     );
 
-    // Switch to descending (newest first)
-    const newestFirstTab = screen.getByText('Янгилари олдин');
-    fireEvent.click(newestFirstTab);
+    // Switch to ascending (oldest first)
+    fireEvent.click(screen.getByText('Эскилари олдин'));
 
     await waitFor(() => {
       expect(getTopicEvidenceSpy).toHaveBeenCalledWith(
         'top_1',
-        expect.objectContaining({ order: 'DESC' }),
+        expect.objectContaining({ order: 'ASC' }),
         expect.any(AbortSignal),
       );
+    });
+
+    // ASC renders oldest first: evi_1 before evi_2
+    await waitFor(() => {
+      const ascRows = Array.from(document.querySelectorAll('[id^="evidence-item-"]'));
+      expect(ascRows.map((row) => row.id)).toEqual(['evidence-item-evi_1', 'evidence-item-evi_2']);
+    });
+
+    // Switching back restores newest-first rendering (React Query may serve the cached
+    // DESC page, so the contract is the rendered order, not a third network call)
+    fireEvent.click(screen.getByText('Янгилари олдин'));
+
+    await waitFor(() => {
+      const descRows = Array.from(document.querySelectorAll('[id^="evidence-item-"]'));
+      expect(descRows.map((row) => row.id)).toEqual(['evidence-item-evi_2', 'evidence-item-evi_1']);
     });
   });
 });
