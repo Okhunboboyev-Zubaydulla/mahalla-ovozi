@@ -29,6 +29,7 @@ export const telegramBotClient = {
       {
         method: 'POST',
         body: JSON.stringify(payload),
+        timeoutMs: 60_000,
       },
       ConnectTelegramBotResponseSchema
     );

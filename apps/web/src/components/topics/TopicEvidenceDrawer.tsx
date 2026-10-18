@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react';
-import { Drawer, Typography, Tag, Space, Skeleton, Button, Alert, Segmented } from 'antd';
+import { Drawer, Typography, Tag, Space, Skeleton, Button, Alert, Segmented, Empty } from 'antd';
 import {
   CloseOutlined,
   EnvironmentOutlined,
@@ -50,6 +50,9 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
     evidenceList,
     totalCount,
     isLoading,
+    isPending,
+    isFetching,
+    isEnabled,
     isError,
     error,
     isFetchingNextPage,
@@ -188,6 +191,67 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
   const errorMessage =
     error instanceof Error ? error.message : 'Далилларни юклашда хатолик юз берди.';
 
+  // Mutually exclusive evidence-region states, in strict priority order.
+  const evidenceStateContent = isError ? (
+    <div style={{ padding: '4px 0' }}>
+      <Alert
+        type="error"
+        showIcon
+        message="Далилларни юклашда хатолик"
+        description={errorMessage}
+        style={{
+          textAlign: 'left',
+          backgroundColor: '#FEE2E2',
+          borderColor: '#FECACA',
+          marginBottom: 16,
+          borderRadius: 8,
+          boxShadow: 'none',
+        }}
+      />
+      <Button
+        type="primary"
+        icon={<ReloadOutlined />}
+        onClick={() => refetch()}
+        style={{ fontWeight: 600, borderRadius: 6, boxShadow: 'none' }}
+      >
+        Қайта уриниш
+      </Button>
+    </div>
+  ) : !isEnabled ? (
+    <Alert
+      type="info"
+      showIcon
+      message="Далиллар мавжуд эмас"
+      description="Далилларни юклаш учун туман ва мавзу танланган бўлиши керак."
+      style={{
+        textAlign: 'left',
+        backgroundColor: '#E0F2FE',
+        borderColor: '#BAE6FD',
+        borderRadius: 8,
+        boxShadow: 'none',
+      }}
+    />
+  ) : isLoading && evidenceList.length === 0 ? (
+    <div style={{ padding: '12px 0' }} data-testid="evidence-timeline-skeleton">
+      <Skeleton active avatar paragraph={{ rows: 3 }} />
+      <Skeleton active avatar paragraph={{ rows: 3 }} style={{ marginTop: 24 }} />
+    </div>
+  ) : evidenceList.length === 0 ? (
+    <Empty description="Далиллар топилмади" style={{ padding: '24px 0' }} />
+  ) : (
+    <EvidenceTimeline
+      evidenceList={evidenceList}
+      totalCount={totalCount}
+      hasNextPage={hasNextPage}
+      isFetchingNextPage={isFetchingNextPage}
+      isFetchNextPageError={isFetchNextPageError}
+      onFetchNextPage={fetchNextPage}
+      focusHokim={effectiveFocusHokim}
+      sentinelRef={bottomSentinelRef}
+      topSentinelRef={topSentinelRef}
+    />
+  );
+
   return (
     <Drawer
       open={Boolean(topicId)}
@@ -282,39 +346,12 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
           </div>
         )}
 
-        {/* 2. Error State for Initial Load (AC 7) */}
-        {!isLoading && isError && !topic && (
-          <div style={{ padding: '24px 20px', textAlign: 'center' }}>
-          <Alert
-            type="error"
-            showIcon
-            message="Юклашда хатолик"
-            description={errorMessage}
-            style={{
-              textAlign: 'left',
-              backgroundColor: '#FEE2E2',
-              borderColor: '#FECACA',
-              marginBottom: 16,
-              borderRadius: 8,
-              boxShadow: 'none',
-            }}
-          />
-          <Button
-            type="primary"
-            icon={<ReloadOutlined />}
-            onClick={() => refetch()}
-            style={{ fontWeight: 600, borderRadius: 6, boxShadow: 'none' }}
-          >
-            Қайта уриниш
-          </Button>
-        </div>
-      )}
-
-      {/* 3. Loaded / Optimistic Topic Header & Evidence Stream */}
+      {/* 2. Loaded / Optimistic Topic Header & Evidence Stream */}
       {topic && (
         <>
           <div
             ref={scrollContainerRef}
+            aria-busy={isFetching || isPending}
             style={{
               flex: 1,
               overflowY: 'auto',
@@ -492,24 +529,7 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
 
             {/* Evidence Timeline */}
             <div style={{ padding: '16px 20px 24px 20px', flex: 1 }}>
-              {isLoading && evidenceList.length === 0 ? (
-                <div style={{ padding: '12px 0' }} data-testid="evidence-timeline-skeleton">
-                  <Skeleton active avatar paragraph={{ rows: 3 }} />
-                  <Skeleton active avatar paragraph={{ rows: 3 }} style={{ marginTop: 24 }} />
-                </div>
-              ) : (
-                <EvidenceTimeline
-                  evidenceList={evidenceList}
-                  totalCount={totalCount}
-                  hasNextPage={hasNextPage}
-                  isFetchingNextPage={isFetchingNextPage}
-                  isFetchNextPageError={isFetchNextPageError}
-                  onFetchNextPage={fetchNextPage}
-                  focusHokim={effectiveFocusHokim}
-                  sentinelRef={bottomSentinelRef}
-                  topSentinelRef={topSentinelRef}
-                />
-              )}
+              {evidenceStateContent}
             </div>
           </div>
 

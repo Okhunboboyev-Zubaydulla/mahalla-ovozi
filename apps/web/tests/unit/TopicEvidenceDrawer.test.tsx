@@ -6,6 +6,7 @@ import { ConfigProvider } from 'antd';
 import { TopicEvidenceDrawer } from '../../src/components/topics/TopicEvidenceDrawer.js';
 import { TopicReadStateProvider } from '../../src/hooks/useTopicReadState.js';
 import { hokimTopicsClient } from '../../src/topics/hokim-topics-client.js';
+import { ApiError } from '../../src/lib/api-client.js';
 import { mahallaTheme } from '../../src/theme/antd-theme.js';
 import {
   TopicCardItem,
@@ -50,20 +51,22 @@ beforeAll(() => {
   setupIntersectionObserver();
 });
 
-// Mock useAuth & useOptionalAuth
-vi.mock('../../src/auth/auth-context.js', () => {
-  const authState = {
+// Mock useAuth & useOptionalAuth through a mutable holder so individual tests
+// can simulate a session without a district (query disabled).
+const authMock = vi.hoisted(() => ({
+  current: {
     actor: {
       id: 'acc_hokim_1',
-      districtId: 'dist_test_1',
+      districtId: 'dist_test_1' as string | null,
       role: 'DISTRICT_HOKIM',
     },
-  };
-  return {
-    useAuth: () => authState,
-    useOptionalAuth: () => authState,
-  };
-});
+  },
+}));
+
+vi.mock('../../src/auth/auth-context.js', () => ({
+  useAuth: () => authMock.current,
+  useOptionalAuth: () => authMock.current,
+}));
 
 const mockTopic1: TopicCardItem = {
   id: 'top_1',
@@ -143,6 +146,13 @@ describe('TopicEvidenceDrawer Component Tests', () => {
     vi.restoreAllMocks();
     setupMatchMedia();
     setupIntersectionObserver();
+    authMock.current = {
+      actor: {
+        id: 'acc_hokim_1',
+        districtId: 'dist_test_1',
+        role: 'DISTRICT_HOKIM',
+      },
+    };
   });
 
   it('renders topic metadata, anchor quote callout, and evidence list (AC 2, 6, 7, 9)', async () => {
@@ -490,5 +500,80 @@ describe('TopicEvidenceDrawer Component Tests', () => {
       const descRows = Array.from(document.querySelectorAll('[id^="evidence-item-"]'));
       expect(descRows.map((row) => row.id)).toEqual(['evidence-item-evi_2', 'evidence-item-evi_1']);
     });
+  });
+
+  it('shows the evidence error alert with a working retry button when the topic is present (regression)', async () => {
+    const getTopicEvidenceSpy = vi
+      .spyOn(hokimTopicsClient, 'getTopicEvidence')
+      // 4xx is terminal under the hook's retry policy, so the error surfaces immediately
+      .mockRejectedValue(new ApiError('Сўров нотўғри.', 'BAD_REQUEST', 400, false));
+
+    renderWithProviders(
+      <TopicEvidenceDrawer topicId="top_1" initialTopic={mockTopic1} onClose={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Далилларни юклашда хатолик')).toBeTruthy();
+    });
+
+    // The error state replaces the skeleton entirely
+    expect(screen.queryByTestId('evidence-timeline-skeleton')).toBeNull();
+    expect(screen.queryByText('Далиллар топилмади')).toBeNull();
+
+    const callsBeforeRetry = getTopicEvidenceSpy.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /Қайта уриниш/ }));
+
+    await waitFor(() => {
+      expect(getTopicEvidenceSpy.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+    });
+  });
+
+  it('renders the empty state instead of the skeleton when the query succeeds with no evidence', async () => {
+    const emptyResponse: TopicEvidenceResponse = {
+      topic: mockTopic1,
+      anchorQuote: '',
+      anchorEvidenceId: '',
+      evidence: [],
+      totalCount: 0,
+      nextCursor: null,
+      hasNextPage: false,
+    };
+
+    vi.spyOn(hokimTopicsClient, 'getTopicEvidence').mockResolvedValue(emptyResponse);
+
+    renderWithProviders(<TopicEvidenceDrawer topicId="top_1" onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Далиллар топилмади')).toBeTruthy();
+    });
+
+    expect(screen.queryByTestId('evidence-timeline-skeleton')).toBeNull();
+    expect(screen.queryByText('Далилларни юклашда хатолик')).toBeNull();
+  });
+
+  it('shows the selection-required info message when the query is not enabled', async () => {
+    authMock.current = {
+      actor: {
+        id: 'acc_hokim_1',
+        districtId: null,
+        role: 'DISTRICT_HOKIM',
+      },
+    };
+
+    const getTopicEvidenceSpy = vi.spyOn(hokimTopicsClient, 'getTopicEvidence');
+
+    renderWithProviders(
+      <TopicEvidenceDrawer topicId="top_1" initialTopic={mockTopic1} onClose={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Далилларни юклаш учун туман ва мавзу танланган бўлиши керак.'),
+      ).toBeTruthy();
+    });
+
+    expect(screen.queryByTestId('evidence-timeline-skeleton')).toBeNull();
+    expect(screen.queryByText('Далилларни юклашда хатолик')).toBeNull();
+    expect(getTopicEvidenceSpy).not.toHaveBeenCalled();
   });
 });

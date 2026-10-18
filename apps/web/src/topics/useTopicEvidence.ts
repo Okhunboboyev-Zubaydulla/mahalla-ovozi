@@ -24,6 +24,9 @@ export interface UseTopicEvidenceResult {
   evidenceList: TopicEvidenceItem[];
   totalCount: number;
   isLoading: boolean;
+  isPending: boolean;
+  isFetching: boolean;
+  isEnabled: boolean;
   isError: boolean;
   isInvalidated: boolean;
   error: unknown;
@@ -43,6 +46,7 @@ export function useTopicEvidence(
   const queryClient = useQueryClient();
 
   const order = options?.order ?? 'DESC';
+  const isEnabled = Boolean(districtId && topicId && actor?.role === 'DISTRICT_HOKIM');
   const queryKey = ['topic-evidence', districtId, topicId || '', order];
   const configuredRetry = queryClient.getDefaultOptions().queries?.retry;
   const effectiveRetry = typeof configuredRetry === 'number' ? configuredRetry : 2;
@@ -50,6 +54,8 @@ export function useTopicEvidence(
   const {
     data,
     isLoading,
+    isPending,
+    isFetching,
     isError,
     error,
     isFetchingNextPage,
@@ -82,7 +88,7 @@ export function useTopicEvidence(
     initialPageParam: undefined,
     getNextPageParam: (lastPage) =>
       lastPage.hasNextPage && lastPage.nextCursor ? lastPage.nextCursor : undefined,
-    enabled: Boolean(districtId && topicId && actor?.role === 'DISTRICT_HOKIM'),
+    enabled: isEnabled,
     staleTime: 2_000,
     refetchInterval: (query) => {
       // Only auto-poll when on initial page; pause background polling during deep pagination
@@ -94,6 +100,10 @@ export function useTopicEvidence(
     retry: (failureCount, err) => {
       // Do not retry terminal client/auth errors (4xx) or schema parsing mismatches
       if (err instanceof ApiError) {
+        // A request-deadline timeout is retried exactly once, then surfaced.
+        if (err.code === 'TIMEOUT') {
+          return failureCount < 1;
+        }
         if (err.statusCode >= 400 && err.statusCode < 500) {
           return false;
         }
@@ -235,6 +245,9 @@ export function useTopicEvidence(
     evidenceList,
     totalCount: firstPage?.totalCount ?? fallbackTopic?.evidenceCount ?? 0,
     isLoading,
+    isPending,
+    isFetching,
+    isEnabled,
     isError,
     isInvalidated,
     error,

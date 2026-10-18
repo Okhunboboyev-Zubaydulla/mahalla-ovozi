@@ -79,6 +79,7 @@ export const issuesClient = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason }),
+        timeoutMs: 60_000,
       },
       RetryOperationResponseSchema,
     );
@@ -96,6 +97,7 @@ export const issuesClient = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        timeoutMs: 60_000,
       },
       RetryOperationResponseSchema,
     );

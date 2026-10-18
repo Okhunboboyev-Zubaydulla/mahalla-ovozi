@@ -125,6 +125,7 @@ export const subscriptionClient = {
       `/api/v1/districts/${encodeURIComponent(districtId)}/subscription/execute-live-deletion`,
       {
         method: 'POST',
+        timeoutMs: 120_000,
       },
       ExecuteLiveDeletionResponseSchema,
     );

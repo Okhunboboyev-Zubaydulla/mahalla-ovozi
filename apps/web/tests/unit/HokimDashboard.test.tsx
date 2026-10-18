@@ -418,7 +418,7 @@ describe('Hokim Dashboard Component & Integration Tests (Story 3.1)', () => {
 
       // Global board error banners must NOT be rendered
       expect(screen.queryByText(/Янги маълумотларни юклаб бўлмади/)).toBeNull();
-      expect(screen.queryByText(/Юклашда хатолик/)).toBeNull();
+      expect(screen.queryByText(/Далилларни юклашда хатолик/)).toBeNull();
     });
 
     it('coordinated statistics retry triggers both board and statistics refresh (AC 6)', async () => {
