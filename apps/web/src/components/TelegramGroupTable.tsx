@@ -432,6 +432,7 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
           }}
         >
           <Input
+            aria-label="Гуруҳларни қидириш"
             placeholder="Маҳалла номи ёки Chat ID бўйича қидириш..."
             prefix={<SearchOutlined style={{ color: themeColors.colorIconPlaceholder }} />}
             value={searchText}
@@ -441,6 +442,7 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
             style={{ maxWidth: '360px', width: '100%' }}
           />
           <Select<PausedStateFilter>
+            aria-label="Тўхтатилган ҳолат бўйича филтр"
             value={pausedFilter}
             onChange={setPausedFilter}
             options={PAUSED_FILTER_OPTIONS}
@@ -463,6 +465,7 @@ export function TelegramGroupTable({ districtId, isOffline: isOfflineProp }: Tel
             message={
               <Space wrap size="middle" align="center">
                 <Checkbox
+                  aria-label="Барча гуруҳларни танлаш"
                   checked={allVisibleSelected}
                   onChange={(e) => handleToggleSelectAllVisible(e.target.checked)}
                   data-testid="select-all-visible"

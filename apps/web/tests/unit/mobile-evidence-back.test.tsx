@@ -195,10 +195,15 @@ describe('Mobile Evidence Back Navigation Integration Test', () => {
       </React.StrictMode>,
     );
 
-    // 1. Initial Dashboard Load: Topic is visible in WATER lane
-    await waitFor(() => {
-      expect(screen.getAllByText('Сув босими пасайиши кузатилмоқда.').length).toBeGreaterThan(0);
-    });
+    // 1. Initial Dashboard Load: Topic is visible in WATER lane.
+    // The lane board sits behind a React.lazy boundary, so under a loaded
+    // full-suite run the first paint can take longer than the 1s default.
+    await waitFor(
+      () => {
+        expect(screen.getAllByText('Сув босими пасайиши кузатилмоқда.').length).toBeGreaterThan(0);
+      },
+      { timeout: 5000 },
+    );
 
     // Verify 0 notification badge
     expect(screen.queryByText(/\+.*янги/)).toBeNull();

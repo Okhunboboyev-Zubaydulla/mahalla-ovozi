@@ -14,6 +14,29 @@ import { DashboardFilterState } from '../hooks/useDashboardFilterParams.js';
 import { useTopicReadState } from '../hooks/useTopicReadState.js';
 import { ApiError } from '../lib/api-client.js';
 
+const TOPIC_BOARD_STALE_TIME_MS = 10_000;
+const TOPIC_BOARD_REFETCH_INTERVAL_MS = 15_000;
+const TOPIC_BOARD_ERROR_BACKOFF_INTERVAL_MS = 60_000;
+
+interface TopicBoardPollingSnapshot {
+  readonly state: {
+    readonly status: 'pending' | 'error' | 'success';
+  };
+}
+
+function resolveTopicBoardRefetchInterval(
+  snapshot: TopicBoardPollingSnapshot,
+  isPaused: boolean,
+): number | false {
+  if (isPaused) {
+    return false;
+  }
+  if (snapshot.state.status === 'error') {
+    return TOPIC_BOARD_ERROR_BACKOFF_INTERVAL_MS;
+  }
+  return TOPIC_BOARD_REFETCH_INTERVAL_MS;
+}
+
 export interface LaneLocalState extends HokimLaneBoardData {
   isLoadingMore: boolean;
   loadMoreError: string | null;
@@ -210,8 +233,9 @@ export function useHokimTopicBoard(
       }
       return previousData;
     },
-    staleTime: 2_000,
-    refetchInterval: options?.isPaused ? false : 4_000,
+    staleTime: TOPIC_BOARD_STALE_TIME_MS,
+    refetchInterval: (query) =>
+      resolveTopicBoardRefetchInterval(query, Boolean(options?.isPaused)),
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     networkMode: 'online',

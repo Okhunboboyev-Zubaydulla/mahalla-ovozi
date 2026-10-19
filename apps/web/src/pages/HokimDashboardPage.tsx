@@ -6,7 +6,7 @@ import { TopicCardItem } from '@mahalla-ovozi/api-contracts';
 import { BoardToolbar } from '../components/topics/BoardToolbar.js';
 import { FilterModalSheet } from '../components/topics/FilterModalSheet.js';
 import { TopicStatisticsStrip } from '../components/topics/TopicStatisticsStrip.js';
-import { FiveLaneBoard } from '../components/topics/FiveLaneBoard.js';
+import type { FiveLaneBoardProps } from '../components/topics/FiveLaneBoard.js';
 import { TopicEvidenceDrawer } from '../components/topics/TopicEvidenceDrawer.js';
 import { DashboardHelpDrawer } from '../components/topics/DashboardHelpDrawer.js';
 import { useHokimTopicBoard } from '../topics/useHokimTopicBoard.js';
@@ -21,6 +21,16 @@ import { formatTashkentTime } from '../lib/formatters.js';
 import { useAuth } from '../auth/auth-context.js';
 
 const { Title, Paragraph } = Typography;
+
+// Lane board owns the only @dnd-kit UI in the app; its drag-to-reorder
+// affordance is hidden below 1024px, so the drag-and-drop runtime is loaded
+// lazily into its own chunk instead of the eager entry graph.
+const FiveLaneBoard = React.lazy(
+  async (): Promise<{ default: React.ComponentType<FiveLaneBoardProps> }> => {
+    const mod = await import('../components/topics/FiveLaneBoard.js');
+    return { default: mod.FiveLaneBoard };
+  },
+);
 
 export const HokimDashboardPage: React.FC = () => {
   const { actor } = useAuth();
@@ -393,18 +403,33 @@ export const HokimDashboardPage: React.FC = () => {
         />
       )}
 
-      <FiveLaneBoard
-        lanes={lanes}
-        activeLanes={activeLanes}
-        isFiltered={!isDefaultFilters || Boolean(searchQuery.trim())}
-        onResetFilters={handleResetAll}
-        selectedTopicId={selectedTopicId}
-        searchQuery={searchQuery}
-        onLoadMore={loadMore}
-        onSelectTopic={handleSelectTopic}
-        districtId={(board?.districtId || actor?.districtId) ?? undefined}
-        userId={actor?.id}
-      />
+      <React.Suspense
+        fallback={
+          <main
+            aria-busy="true"
+            aria-label="Йўналишлар панели юкланмоқда"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              backgroundColor: '#F8FAFC',
+              padding: '8px 20px 6px 20px',
+            }}
+          />
+        }
+      >
+        <FiveLaneBoard
+          lanes={lanes}
+          activeLanes={activeLanes}
+          isFiltered={!isDefaultFilters || Boolean(searchQuery.trim())}
+          onResetFilters={handleResetAll}
+          selectedTopicId={selectedTopicId}
+          searchQuery={searchQuery}
+          onLoadMore={loadMore}
+          onSelectTopic={handleSelectTopic}
+          districtId={(board?.districtId || actor?.districtId) ?? undefined}
+          userId={actor?.id}
+        />
+      </React.Suspense>
 
       <TopicEvidenceDrawer
         topicId={selectedTopicId}

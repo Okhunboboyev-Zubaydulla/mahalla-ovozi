@@ -273,7 +273,7 @@ describe('Story 3.6: Dashboard Help & Factual Guidance Tests', () => {
       });
 
       // 1. Open Topic Evidence Drawer first
-      const topicCard = screen.getByText('Сув босими бўйича мурожаатлар келиб тушди.');
+      const topicCard = await screen.findByText('Сув босими бўйича мурожаатлар келиб тушди.');
       fireEvent.click(topicCard);
 
       await waitFor(() => {

@@ -14,7 +14,6 @@ import {
   Alert,
   Modal,
   Form,
-  message,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -37,6 +36,7 @@ import type {
 import { districtClient } from '../../district/district-client.js';
 import { useDistrictMahallas } from '../../topics/district-topics-client.js';
 import { useSignalMessages, useBatchDeleteSignals } from '../../hooks/useSignalMessages.js';
+import { useNotify } from '../../lib/notify.js';
 import { SignalInspectionDrawer } from './SignalInspectionDrawer.js';
 import { formatTashkentDateTime } from '../../lib/formatters.js';
 import { CreateManualSignalModal } from './CreateManualSignalModal.js';
@@ -81,6 +81,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
   initialDistrictId,
 }) => {
   const { token } = theme.useToken();
+  const { notifySuccess, notifyError } = useNotify();
 
   // Filters State
   const [districtId, setDistrictId] = useState<string | undefined>(
@@ -151,12 +152,12 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
         ids,
         changeReason: values.changeReason,
       });
-      message.success(`${result.deletedCount} та хабар муваффақиятли ўчирилди`);
+      notifySuccess(`${result.deletedCount} та хабар муваффақиятли ўчирилди`);
       setSelectedRowKeys([]);
       setBatchDeleteModalOpen(false);
       batchDeleteForm.resetFields();
-    } catch (err: any) {
-      message.error(err.message || 'Хабарларни ўчиришда хатолик юз берди');
+    } catch (err) {
+      notifyError(err, 'Хабарларни ўчиришда хатолик юз берди');
     }
   };
 
@@ -456,6 +457,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
 
             <Space>
               <Select
+                aria-label="Авто-янгилаш интервали"
                 value={autoRefreshSec}
                 onChange={(val) => setAutoRefreshSec(val)}
                 style={{ width: 140 }}
@@ -495,6 +497,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
             }}
           >
             <Select
+              aria-label="Туман бўйича филтр"
               allowClear
               placeholder="Барча туманлар"
               value={districtId}
@@ -530,6 +533,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
             />
 
             <Select
+              aria-label="Қарор ҳолати бўйича филтр"
               value={statusFilter}
               onChange={(val) => {
                 setStatusFilter(val);
@@ -545,6 +549,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
             />
 
             <Select
+              aria-label="Соҳа бўйича филтр"
               allowClear
               placeholder="Барча соҳалар"
               value={laneFilter}
@@ -561,6 +566,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
             />
 
             <DatePicker.RangePicker
+              aria-label="Сана оралиғи"
               value={dateRange}
               onChange={(dates) => {
                 setDateRange(dates as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null);
@@ -573,6 +579,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
             />
 
             <Input
+              aria-label="Матн бўйича қидирув"
               allowClear
               prefix={<SearchOutlined />}
               placeholder="Матн бўйича қидириш..."
@@ -705,6 +712,7 @@ export const SignalMonitoringTable: React.FC<SignalMonitoringTableProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Select
+              aria-label="Саҳифадаги сигналлар сони"
               value={pageSize}
               onChange={(val) => {
                 setPageSize(val);

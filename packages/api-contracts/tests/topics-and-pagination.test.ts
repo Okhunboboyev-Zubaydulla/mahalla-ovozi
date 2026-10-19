@@ -4,7 +4,6 @@ import {
   QualifyingLaneSchema,
   TelegramReplyMetadataSchema,
   CursorPaginationQuerySchema,
-  CursorPaginationMetaSchema,
   ApiErrorEnvelopeSchema,
   DistrictActivationBlockedErrorEnvelopeSchema,
   TopicDateFilterSchema,

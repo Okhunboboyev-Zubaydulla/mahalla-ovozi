@@ -1,4 +1,10 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  keepPreviousData,
+  type Query,
+} from '@tanstack/react-query';
 import type {
   ListSignalsQuery,
   ListSignalsResponse,
@@ -36,7 +42,12 @@ export const SIGNAL_DETAIL_QUERY_KEY = signalQueryKeys.details();
 export function useSignalMessages(
   filters: ListSignalsQuery,
   options?: {
-    refetchInterval?: number | false | ((query: any) => number | false | undefined);
+    refetchInterval?:
+      | number
+      | false
+      | ((
+          query: Query<ListSignalsResponse, Error, ListSignalsResponse, readonly unknown[]>,
+        ) => number | false | undefined);
   },
 ) {
   return useQuery<ListSignalsResponse>({

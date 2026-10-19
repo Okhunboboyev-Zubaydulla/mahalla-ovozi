@@ -89,10 +89,10 @@ export function useTopicEvidence(
     getNextPageParam: (lastPage) =>
       lastPage.hasNextPage && lastPage.nextCursor ? lastPage.nextCursor : undefined,
     enabled: isEnabled,
-    staleTime: 2_000,
+    staleTime: 15_000,
     refetchInterval: (query) => {
       // Only auto-poll when on initial page; pause background polling during deep pagination
-      return (query.state.data?.pages.length ?? 0) <= 1 ? 4_000 : false;
+      return (query.state.data?.pages.length ?? 0) <= 1 ? 15_000 : false;
     },
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,

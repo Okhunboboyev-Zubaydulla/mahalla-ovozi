@@ -142,7 +142,7 @@ export const AnalysisSettingsActivationModal: React.FC<
     }
   };
 
-  const rawDate = (activeSettings as any)?.activatedAt;
+  const rawDate = activeSettings.activatedAt;
   const formattedActivatedAt = rawDate
     ? formatTashkentDateTime(rawDate)
     : 'Дастлабки созлама';

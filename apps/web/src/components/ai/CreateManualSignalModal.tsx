@@ -1,9 +1,10 @@
 import React from 'react';
-import { Modal, Form, Input, Select, message } from 'antd';
+import { Modal, Form, Input, Select } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { type QualifyingLane } from '@mahalla-ovozi/api-contracts';
 import { districtClient } from '../../district/district-client.js';
 import { useCreateManualSignal } from '../../hooks/useSignalMessages.js';
+import { useNotify } from '../../lib/notify.js';
 
 const { TextArea } = Input;
 
@@ -28,6 +29,7 @@ export const CreateManualSignalModal: React.FC<CreateManualSignalModalProps> = (
 }) => {
   const [form] = Form.useForm();
   const createMutation = useCreateManualSignal();
+  const { notifySuccess, notifyError } = useNotify();
 
   const { data: districtsData, isLoading: isDistrictsLoading } = useQuery({
     queryKey: ['districts', 'list'],
@@ -50,11 +52,11 @@ export const CreateManualSignalModal: React.FC<CreateManualSignalModalProps> = (
         lanes: values.lanes,
         changeReason: values.changeReason.trim(),
       });
-      message.success('Янги сигнал муваффақиятли яратилди ва мавзуга бириктирилди');
+      notifySuccess('Янги сигнал муваффақиятли яратилди ва мавзуга бириктирилди');
       form.resetFields();
       onClose();
-    } catch (err: any) {
-      message.error(err.message || 'Сигнал яратишда хатолик юз берди');
+    } catch (err) {
+      notifyError(err, 'Сигнал яратишда хатолик юз берди');
     }
   };
 

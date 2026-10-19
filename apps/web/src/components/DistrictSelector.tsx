@@ -62,6 +62,7 @@ export const DistrictSelector: React.FC<DistrictSelectorProps> = ({ onOpenCreate
 
   return (
     <Select
+      aria-label="Туманни танлаш"
       id="district-selector"
       showSearch
       allowClear

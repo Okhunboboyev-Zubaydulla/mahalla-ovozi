@@ -9,6 +9,7 @@
     "build:analyze": "tsc && vite build --mode analyze",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests vite.config.ts",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:perf": "playwright test tests/e2e/performance.spec.ts",

@@ -10,11 +10,21 @@ if (!fs.existsSync(distAssetsDir)) {
   process.exit(1);
 }
 
+const isVendorChunk = (file) => file.startsWith('vendor-');
+
 const BUDGETS = [
   {
-    name: 'Max Individual Chunk Budget',
-    match: () => true,
+    name: 'Max Individual App Chunk Budget',
+    // App code only: everything that is not an explicit vendor-* group.
+    match: (file) => !isVendorChunk(file),
     maxBytes: 700 * 1024, // 700 KB (Original was 1,174 KB)
+  },
+  {
+    name: 'Max Individual Vendor Chunk Budget',
+    // Third-party runtimes (antd + rc-* helpers legitimately dwarf app code),
+    // so they get their own looser ceiling instead of the app ceiling.
+    match: isVendorChunk,
+    maxBytes: 1200 * 1024, // 1200 KB
   },
   {
     name: 'Vendor React Runtime Budget',

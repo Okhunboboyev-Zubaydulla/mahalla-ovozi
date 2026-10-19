@@ -87,6 +87,7 @@ export const HokimRecognitionTermsInput: React.FC<
           <Space direction="vertical" style={{ width: '100%' }} size="small">
             <Space wrap style={{ width: '100%' }}>
               <Input
+                aria-label="Янги атама"
                 id="hokim-new-term"
                 placeholder="Янги атама (масалан: Ҳоким ёрдамчиси)"
                 value={newTerm}

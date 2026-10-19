@@ -22,6 +22,7 @@ import {
   containsProhibitedSecrets,
 } from '@mahalla-ovozi/api-contracts';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus.js';
+import { getErrorMessage } from '../../lib/error-message.js';
 import { computeDistrictSettingsDiff } from './diff-utils.js';
 import { ConfigurationDiffViewer } from './ConfigurationDiffViewer.js';
 
@@ -80,11 +81,13 @@ export const AnalysisSettingsRollbackModal: React.FC<
     try {
       await onConfirm((values?.changeReason || '').trim());
       handleClose();
-    } catch (err: any) {
-      const msg =
-        err?.message ||
-        'Созламаларни қайтаришда хатолик юз берди. Илтимос, қайта уриниб кўринг.';
-      setApiError(msg);
+    } catch (err) {
+      setApiError(
+        getErrorMessage(
+          err,
+          'Созламаларни қайтаришда хатолик юз берди. Илтимос, қайта уриниб кўринг.',
+        ),
+      );
     } finally {
       setIsSubmitting(false);
     }

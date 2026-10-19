@@ -3,6 +3,7 @@ import {
   DistrictNotReadyErrorEnvelopeSchema,
   PrerequisiteItem,
 } from '@mahalla-ovozi/api-contracts';
+import { envConfig } from './env';
 
 /** Default deadline for a single API request (headers + body). */
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -136,7 +137,9 @@ export async function request<T>(
   try {
     let response: Response;
     try {
-      response = await fetch(url, {
+      // `envConfig.apiBaseUrl` is '' by default, so this concatenation yields the
+      // caller's relative path byte-for-byte; an absolute base is opt-in via env.
+      response = await fetch(`${envConfig.apiBaseUrl}${url}`, {
         ...fetchOptions,
         credentials: 'include', // Include host-scoped session cookies
         headers,

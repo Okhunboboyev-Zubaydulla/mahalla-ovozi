@@ -13,8 +13,13 @@ import { useInRouterContext, useSearchParams } from 'react-router-dom';
 import { districtClient } from './district-client.js';
 import { districtQueryKeys } from './query-keys.js';
 import { useOptionalAuth } from '../auth/auth-context.js';
+import {
+  readStoredDistrictId,
+  writeStoredDistrictId,
+  clearStoredDistrictId,
+} from '../lib/district-storage.js';
 
-export const DISTRICT_STORAGE_KEY = 'mahalla_active_district_id';
+export { DISTRICT_STORAGE_KEY } from '../lib/district-storage.js';
 
 export interface DistrictContextValue {
   activeDistrictId: string | null;
@@ -70,9 +75,7 @@ function DistrictRouterSync({
   // 2. Synchronize state if URL search param changes externally (e.g. browser navigation)
   useEffect(() => {
     if (searchParamDistrictId && searchParamDistrictId !== activeRef.current) {
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(DISTRICT_STORAGE_KEY, searchParamDistrictId);
-      }
+      writeStoredDistrictId(searchParamDistrictId);
       setActiveDistrictId(searchParamDistrictId);
     }
   }, [searchParamDistrictId, setActiveDistrictId]);
@@ -89,10 +92,10 @@ export function DistrictProvider({ children }: { children: ReactNode }) {
     const urlParams = new URLSearchParams(window.location.search);
     const paramId = urlParams.get('districtId');
     if (paramId) {
-      localStorage.setItem(DISTRICT_STORAGE_KEY, paramId);
+      writeStoredDistrictId(paramId);
       return paramId;
     }
-    return localStorage.getItem(DISTRICT_STORAGE_KEY) || null;
+    return readStoredDistrictId();
   });
 
   const [dirtySet, setDirtySet] = useState<Set<string>>(new Set());
@@ -118,9 +121,7 @@ export function DistrictProvider({ children }: { children: ReactNode }) {
     if (!districtsData?.districts || !activeDistrictId) return;
     const exists = districtsData.districts.some((d) => d.id === activeDistrictId);
     if (!exists) {
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(DISTRICT_STORAGE_KEY);
-      }
+      clearStoredDistrictId();
       setActiveDistrictId(null);
     }
   }, [districtsData, activeDistrictId]);
@@ -151,12 +152,10 @@ export function DistrictProvider({ children }: { children: ReactNode }) {
       const prevId = activeDistrictIdRef.current;
 
       // 1. Update localStorage persistence immediately
-      if (typeof window !== 'undefined') {
-        if (nextId) {
-          localStorage.setItem(DISTRICT_STORAGE_KEY, nextId);
-        } else {
-          localStorage.removeItem(DISTRICT_STORAGE_KEY);
-        }
+      if (nextId) {
+        writeStoredDistrictId(nextId);
+      } else {
+        clearStoredDistrictId();
       }
 
       if (prevId && prevId !== nextId) {

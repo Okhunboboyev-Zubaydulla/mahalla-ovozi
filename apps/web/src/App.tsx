@@ -98,9 +98,20 @@ function AuthenticatedRoot() {
     if (location.pathname !== '/') {
       return <Navigate to="/" replace />;
     }
-    return <HokimDashboardPage />;
+    // Hokim dashboard is a self-contained shell (it renders its own BoardToolbar),
+    // so its chunk-load boundary has no persistent chrome to preserve.
+    return (
+      <Suspense fallback={<FullPageLoader />}>
+        <HokimDashboardPage />
+      </Suspense>
+    );
   }
-  return <ConsoleLayout />;
+
+  return (
+    <ProtectedRoute allowedRoles={['PRODUCT_OWNER']}>
+      <ConsoleLayout />
+    </ProtectedRoute>
+  );
 }
 
 export function App() {
@@ -115,14 +126,22 @@ export function App() {
                 <DistrictProvider>
                   <LiveAnnouncerProvider>
                     <TopicReadStateProvider>
-                      <Suspense fallback={<FullPageLoader />}>
                       <Routes>
-                        <Route path="/sign-in" element={<SignInPage />} />
+                        <Route
+                          path="/sign-in"
+                          element={
+                            <Suspense fallback={<FullPageLoader />}>
+                              <SignInPage />
+                            </Suspense>
+                          }
+                        />
                         <Route
                           path="/first-login-password-change"
                           element={
                             <ProtectedRoute>
-                              <FirstSignInPasswordChangePage />
+                              <Suspense fallback={<FullPageLoader />}>
+                                <FirstSignInPasswordChangePage />
+                              </Suspense>
                             </ProtectedRoute>
                           }
                         />
@@ -132,7 +151,9 @@ export function App() {
                           path="/topics/:topicId/evidence"
                           element={
                             <ProtectedRoute>
-                              <TopicEvidencePage />
+                              <Suspense fallback={<FullPageLoader />}>
+                                <TopicEvidencePage />
+                              </Suspense>
                             </ProtectedRoute>
                           }
                         />
@@ -142,7 +163,9 @@ export function App() {
                           path="/help"
                           element={
                             <ProtectedRoute>
-                              <DashboardHelpPage />
+                              <Suspense fallback={<FullPageLoader />}>
+                                <DashboardHelpPage />
+                              </Suspense>
                             </ProtectedRoute>
                           }
                         />
@@ -169,9 +192,8 @@ export function App() {
 
                         <Route path="*" element={<Navigate to="/" replace />} />
                       </Routes>
-                    </Suspense>
-                  </TopicReadStateProvider>
-                </LiveAnnouncerProvider>
+                    </TopicReadStateProvider>
+                  </LiveAnnouncerProvider>
                 </DistrictProvider>
               </BrowserRouter>
             </AuthProvider>
@@ -183,4 +205,3 @@ export function App() {
 }
 
 export default App;
-

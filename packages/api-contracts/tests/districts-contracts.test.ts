@@ -7,7 +7,6 @@ import {
   ListDistrictsResponseSchema,
   GetDistrictResponseSchema,
   UpdateDistrictRequestSchema,
-  UpdateDistrictResponseSchema,
 } from '../src/index.js';
 
 describe('District API Contracts', () => {

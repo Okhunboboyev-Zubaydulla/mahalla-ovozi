@@ -172,6 +172,7 @@ export const DistrictLocalVocabularyInput: React.FC<
           <Space direction="vertical" style={{ width: '100%' }} size="small">
             <Space wrap style={{ width: '100%' }}>
               <Input
+                aria-label="Янги атама"
                 id="district-vocab-new-term"
                 placeholder="Янги атама (масалан: Гулистон МФЙ)"
                 value={newTerm}
@@ -184,6 +185,7 @@ export const DistrictLocalVocabularyInput: React.FC<
                 maxLength={100}
               />
               <Select
+                aria-label="Атама тури"
                 id="district-vocab-new-category"
                 value={newCategory}
                 onChange={setNewCategory}
@@ -194,6 +196,7 @@ export const DistrictLocalVocabularyInput: React.FC<
                 }))}
               />
               <Input
+                aria-label="Қисқача тавсиф"
                 id="district-vocab-new-description"
                 placeholder="Қисқача тавсиф (ихтиёрий)"
                 value={newDescription}

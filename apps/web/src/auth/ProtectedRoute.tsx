@@ -1,10 +1,16 @@
 import { ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
+import type { ActorRole } from '@mahalla-ovozi/api-contracts';
 import { useAuth } from './auth-context.js';
 import { FullPageLoader } from '../components/FullPageLoader.js';
 
-export function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading, mustChangePassword } = useAuth();
+interface ProtectedRouteProps {
+  children: ReactNode;
+  allowedRoles?: readonly ActorRole[];
+}
+
+export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
+  const { actor, isAuthenticated, isLoading, mustChangePassword } = useAuth();
   const location = useLocation();
 
   if (isLoading) {
@@ -23,6 +29,9 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
     return <Navigate to="/" replace />;
   }
 
+  if (allowedRoles !== undefined && (actor === null || !allowedRoles.includes(actor.role))) {
+    return <Navigate to="/" replace />;
+  }
+
   return <>{children}</>;
 }
-

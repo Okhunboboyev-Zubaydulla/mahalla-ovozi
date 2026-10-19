@@ -8,6 +8,7 @@ import {
   Typography,
   Alert,
   Space,
+  Spin,
   theme,
 } from 'antd';
 import {
@@ -24,10 +25,10 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/auth-context.js';
-import { useDistrict, DISTRICT_STORAGE_KEY } from '../district/district-context.js';
+import { useDistrict } from '../district/district-context.js';
+import { clearStoredDistrictId } from '../lib/district-storage.js';
 import { DistrictSelector } from './DistrictSelector.js';
 import { UnsavedChangesModal } from './UnsavedChangesModal.js';
-import { FullPageLoader } from './FullPageLoader.js';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -80,6 +81,27 @@ const MENU_ITEMS = [
   },
 ];
 
+/**
+ * In-place loading indicator for the routed content area.
+ * Deliberately NOT a full-page loader: the sidebar/header shell must stay
+ * mounted and interactive while a route chunk is being fetched.
+ */
+function ContentAreaLoader() {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        minHeight: 240,
+        padding: 48,
+      }}
+    >
+      <Spin size="large" />
+    </div>
+  );
+}
+
 export const ConsoleLayout: React.FC = () => {
   const { token } = theme.useToken();
   const { actor, signOut } = useAuth();
@@ -100,9 +122,7 @@ export const ConsoleLayout: React.FC = () => {
 
   const handleSignOut = () => {
     attemptTransition(async () => {
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem(DISTRICT_STORAGE_KEY);
-      }
+      clearStoredDistrictId();
       await signOut();
       navigate('/sign-in');
     });
@@ -208,7 +228,7 @@ export const ConsoleLayout: React.FC = () => {
 
         {/* Content Outlet for Nested Routes */}
         <Content style={{ padding: 24, minHeight: 'calc(100vh - 64px)' }}>
-          <Suspense fallback={<FullPageLoader />}>
+          <Suspense fallback={<ContentAreaLoader />}>
             <Outlet />
           </Suspense>
         </Content>

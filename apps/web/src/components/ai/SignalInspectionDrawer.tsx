@@ -37,6 +37,7 @@ import {
   useDeleteEvidence,
 } from '../../hooks/useSignalMessages.js';
 import { formatTashkentDateTime } from '../../lib/formatters.js';
+import { getErrorMessage } from '../../lib/error-message.js';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -109,8 +110,8 @@ export const SignalInspectionDrawer: React.FC<SignalInspectionDrawerProps> = ({
       message.success('Хабар далил сифатида муваффақиятли қабул қилинди');
       setPromoteModalOpen(false);
       promoteForm.resetFields();
-    } catch (err: any) {
-      message.error(err.message || 'Хабарни қабул қилишда хатолик юз берди');
+    } catch (err) {
+      message.error(getErrorMessage(err, 'Хабарни қабул қилишда хатолик юз берди'));
     }
   };
 
@@ -127,8 +128,8 @@ export const SignalInspectionDrawer: React.FC<SignalInspectionDrawerProps> = ({
       message.success('Далил соҳаси муваффақиятли қайта таснифланди');
       setReclassifyModalOpen(false);
       reclassifyForm.resetFields();
-    } catch (err: any) {
-      message.error(err.message || 'Қайта таснифлашда хатолик юз берди');
+    } catch (err) {
+      message.error(getErrorMessage(err, 'Қайта таснифлашда хатолик юз берди'));
     }
   };
 
@@ -145,8 +146,8 @@ export const SignalInspectionDrawer: React.FC<SignalInspectionDrawerProps> = ({
       message.success('Далил матни янгиланди ва мавзу қайта ҳисобланди');
       setEditModalOpen(false);
       editForm.resetFields();
-    } catch (err: any) {
-      message.error(err.message || 'Матнни янгилашда хатолик юз берди');
+    } catch (err) {
+      message.error(getErrorMessage(err, 'Матнни янгилашда хатолик юз берди'));
     }
   };
 
@@ -163,8 +164,8 @@ export const SignalInspectionDrawer: React.FC<SignalInspectionDrawerProps> = ({
       setDeleteModalOpen(false);
       deleteForm.resetFields();
       onClose();
-    } catch (err: any) {
-      message.error(err.message || 'Далилни ўчиришда хатолик юз берди');
+    } catch (err) {
+      message.error(getErrorMessage(err, 'Далилни ўчиришда хатолик юз берди'));
     }
   };
 

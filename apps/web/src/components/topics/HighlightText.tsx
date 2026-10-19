@@ -11,18 +11,19 @@ export const HighlightText: React.FC<HighlightTextProps> = ({
   searchQuery,
   style,
 }) => {
-  if (!text || typeof text !== 'string') {
-    return <span style={style}>{text ?? ''}</span>;
-  }
-
+  const safeText = typeof text === 'string' ? text : '';
   const query = searchQuery?.trim() || '';
 
   const parts = useMemo(() => {
-    if (!query) return null;
+    if (!query || !safeText) return null;
     const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(`(${escapedQuery})`, 'gi');
-    return text.split(regex);
-  }, [text, query]);
+    return safeText.split(regex);
+  }, [safeText, query]);
+
+  if (!text || typeof text !== 'string') {
+    return <span style={style}>{text ?? ''}</span>;
+  }
 
   if (!parts || !query) {
     return <span style={style}>{text}</span>;
