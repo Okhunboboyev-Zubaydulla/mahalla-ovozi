@@ -28,7 +28,10 @@ import type {
   ParentReplyContext,
   ExclusionReason,
 } from '../semantic-relevance-evaluator.js';
-import { hasSelfContainedCivicSignal } from '../../telegram-intake/telegram-content-qualification.js';
+import {
+  hasSelfContainedCivicSignal,
+  matchesCivicLaneKeyword,
+} from '../../telegram-intake/telegram-content-qualification.js';
 import { extractVerbatimDisplayText } from '../../telegram-intake/telegram-payload-text.js';
 import { clearPendingRetryFlag } from '../../issues/retry-service.js';
 import { DEBUG_PAYLOAD_RETENTION_MS } from '../../retention/debug-payload-retention.js';
@@ -368,6 +371,255 @@ export async function processSemanticRelevanceJobs(
             if (priorItems.length > 0) {
               authorPriorEvidence = priorItems;
             }
+          }
+
+          // ───────────────────────────────────────────────────────────────────
+          // 3-Tier Deterministic Pre-Filtering Gate (Token Efficiency)
+          // ───────────────────────────────────────────────────────────────────
+          // Gate 1 (Direct Reply to Accepted Evidence / Topic / Prior Context)
+          const isGate1Match = Boolean(
+            replyMetadata?.replyToMessageId &&
+              parentReplyContext?.parentStatus !== 'EXCLUDED',
+          );
+
+          // Gate 2 (Civic Keyword Match or Self-Contained Civic Signal)
+          const isGate2Match =
+            matchesCivicLaneKeyword(verbatimText) ||
+            hasSelfContainedCivicSignal(verbatimText) ||
+            Boolean(
+              burstMessages &&
+                burstMessages.length > 0 &&
+                burstMessages.some(
+                  (m) =>
+                    matchesCivicLaneKeyword(m.verbatimText) ||
+                    hasSelfContainedCivicSignal(m.verbatimText),
+                ),
+            );
+
+          // Gate 3 (3-Minute Follow-up Daisy Chain in same Telegram Chat)
+          let isGate3Match = false;
+
+          if (!isGate1Match && !isGate2Match) {
+            try {
+              const candidateTimestamp = new Date(originalTimestamp);
+              const threeMinutesAgo = new Date(candidateTimestamp.getTime() - 3 * 60 * 1000);
+
+              const recentChatRecords = await db
+                .select({
+                  id: telegramIntakeRecords.id,
+                  telegramMessageId: telegramIntakeRecords.telegramMessageId,
+                  originalTimestamp: telegramIntakeRecords.originalTimestamp,
+                  rawPayload: telegramIntakeRecords.rawPayload,
+                  aiFinalStatus: aiOperations.finalStatus,
+                  aiResultPayload: aiOperations.resultPayload,
+                })
+                .from(telegramIntakeRecords)
+                .leftJoin(
+                  aiOperations,
+                  and(
+                    eq(aiOperations.targetId, telegramIntakeRecords.id),
+                    eq(aiOperations.operationType, 'SEMANTIC_RELEVANCE'),
+                  ),
+                )
+                .where(
+                  and(
+                    eq(telegramIntakeRecords.districtId, districtId),
+                    eq(telegramIntakeRecords.telegramChatId, telegramChatId),
+                    gt(telegramIntakeRecords.originalTimestamp, threeMinutesAgo),
+                    lt(telegramIntakeRecords.originalTimestamp, candidateTimestamp),
+                  ),
+                )
+                .orderBy(desc(telegramIntakeRecords.originalTimestamp))
+                .limit(20);
+
+              // Filter out trivial non-content messages (service messages, empty, etc.)
+              const isTrivial = (raw: unknown): boolean => {
+                if (!raw || typeof raw !== 'object') return true;
+                const p = raw as Record<string, unknown>;
+                const reason = typeof p.exclusionReason === 'string' ? p.exclusionReason : null;
+                if (
+                  reason === 'SERVICE_MESSAGE' ||
+                  reason === 'BOT_MESSAGE' ||
+                  reason === 'EMPTY_CONTENT' ||
+                  reason === 'CAPTIONLESS_MEDIA' ||
+                  reason === 'BOT_COMMAND'
+                ) {
+                  return true;
+                }
+                const text = extractVerbatimDisplayText(null, raw);
+                return !text || text.trim().length === 0;
+              };
+
+              const nonTrivial = recentChatRecords.filter((r) => !isTrivial(r.rawPayload));
+
+              if (nonTrivial.length > 0) {
+                const isRelevantRecord = (r: (typeof nonTrivial)[0]): boolean => {
+                  if (r.aiFinalStatus === 'COMPLETED_RELEVANT') return true;
+                  const aiPayload = r.aiResultPayload as Record<string, unknown> | null;
+                  if (aiPayload?.is_relevant === true) return true;
+                  const raw = r.rawPayload as Record<string, unknown> | null;
+                  if (raw?.status === 'ACCEPTED') return true;
+                  return false;
+                };
+
+                const isExcludedRecord = (r: (typeof nonTrivial)[0]): boolean => {
+                  if (r.aiFinalStatus === 'COMPLETED_IRRELEVANT') return true;
+                  const aiPayload = r.aiResultPayload as Record<string, unknown> | null;
+                  if (aiPayload?.is_relevant === false) return true;
+                  const raw = r.rawPayload as Record<string, unknown> | null;
+                  if (raw?.status === 'EXCLUDED') return true;
+                  return false;
+                };
+
+                const immediatelyPreceding = nonTrivial[0]!;
+
+                if (isRelevantRecord(immediatelyPreceding) && !isExcludedRecord(immediatelyPreceding)) {
+                  let consecutiveUnkeyedCount = 0;
+                  let chainValid = true;
+
+                  for (const rec of nonTrivial) {
+                    if (isExcludedRecord(rec)) {
+                      chainValid = false;
+                      break;
+                    }
+                    if (!isRelevantRecord(rec)) {
+                      chainValid = false;
+                      break;
+                    }
+
+                    const recText = extractVerbatimDisplayText(null, rec.rawPayload) || '';
+                    const hasKey =
+                      matchesCivicLaneKeyword(recText) || hasSelfContainedCivicSignal(recText);
+
+                    if (hasKey) {
+                      // Found the root keyed anchor for this active corroboration chain
+                      break;
+                    } else {
+                      consecutiveUnkeyedCount++;
+                      if (consecutiveUnkeyedCount >= 5) {
+                        chainValid = false;
+                        break;
+                      }
+                    }
+                  }
+
+                  if (chainValid && consecutiveUnkeyedCount <= 5) {
+                    isGate3Match = true;
+                  }
+                }
+              }
+            } catch (gate3Err) {
+              console.warn(
+                JSON.stringify({
+                  event: 'TELEGRAM_SEMANTIC_GATE3_LOOKUP_FAILED',
+                  districtId,
+                  telegramChatId,
+                  error: (gate3Err as Error).message,
+                }),
+              );
+            }
+          }
+
+          // Author continuity: candidate without keywords continues prior same-day accepted report
+          const isAuthorContinuityMatch = Boolean(
+            authorPriorEvidence && authorPriorEvidence.length > 0,
+          );
+
+          if (!isGate1Match && !isGate2Match && !isGate3Match && !isAuthorContinuityMatch) {
+            const [activeProfile] = await db
+              .select({ id: aiProfiles.id })
+              .from(aiProfiles)
+              .where(
+                and(
+                  eq(aiProfiles.operationType, 'SEMANTIC_RELEVANCE'),
+                  eq(aiProfiles.isActive, true),
+                ),
+              )
+              .orderBy(desc(aiProfiles.version))
+              .limit(1);
+
+            const fallbackProfileId = activeProfile?.id ?? 'prof_rel_default';
+            const finalExclusionReason: ExclusionReason = 'GENERAL_CHATTER';
+            const fastFailReasoning =
+              'Deterministic prefilter: No civic keywords, direct evidence reply, or active 3-minute corroboration chain';
+
+            const allBurstIntakes =
+              burstMessages && burstMessages.length > 0
+                ? burstMessages
+                : [{ intakeId, telegramMessageId }];
+
+            const aiOperationId = `aiop_${crypto.randomUUID()}`;
+
+            await withTransactionalIntake(pool, boss, async ({ tx }) => {
+              for (const item of allBurstIntakes) {
+                const opId =
+                  item.intakeId === intakeId ? aiOperationId : `aiop_${crypto.randomUUID()}`;
+                await tx
+                  .insert(aiOperations)
+                  .values({
+                    id: opId,
+                    districtId,
+                    mahallaName,
+                    calendarDay,
+                    operationType: 'SEMANTIC_RELEVANCE',
+                    targetId: item.intakeId,
+                    pinnedProfileId: fallbackProfileId,
+                    contextRevision: initialRevision,
+                    snapshotFingerprint: initialFingerprint,
+                    finalStatus: 'COMPLETED_IRRELEVANT',
+                    resultPayload: {
+                      is_relevant: false,
+                      relevant_lanes: [],
+                      exclusion_reason: finalExclusionReason,
+                      accepted_message_ids: [],
+                      reasoning: fastFailReasoning,
+                    },
+                  })
+                  .onConflictDoNothing();
+              }
+
+              const allIntakeIds = allBurstIntakes.map((m) => m.intakeId);
+              const expiresAt = new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString();
+              const exclusionMeta = JSON.stringify({
+                status: 'EXCLUDED',
+                exclusionReason: finalExclusionReason,
+                verbatimText,
+                reasoning: fastFailReasoning,
+                expiresAt,
+                purgedAt: null,
+              });
+
+              await tx
+                .update(telegramIntakeRecords)
+                .set({
+                  rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
+                  updatedAt: new Date(),
+                })
+                .where(inArray(telegramIntakeRecords.id, allIntakeIds));
+
+              verbatimText = '';
+            });
+
+            const durationMs = Math.round(performance.now() - startTime);
+            console.log(
+              JSON.stringify({
+                event: 'TELEGRAM_SEMANTIC_EXCLUDED_COMMITTED',
+                districtId,
+                mahallaName,
+                calendarDay,
+                telegramChatId,
+                telegramMessageId,
+                aiOperationId,
+                finalStatus: 'COMPLETED_IRRELEVANT',
+                relevantLanes: [],
+                exclusionReason: finalExclusionReason,
+                inputTokens: 0,
+                outputTokens: 0,
+                durationMs,
+                prefilterShortCircuit: true,
+              }),
+            );
+            continue;
           }
 
           // Layer 2: Resolve Immediate Preceding Message & Chat Continuity in this chat

@@ -479,6 +479,49 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
   // ──────────────────────────────────────────────────────────────────────────
 
   it('Matrix #14: Ambiguous Fragment with Same-Day Context qualifies under ELECTRICITY (AC 5)', async () => {
+    const priorIntakeId = `intk_prior_${crypto.randomUUID()}`;
+    await db.insert(telegramIntakeRecords).values({
+      id: priorIntakeId,
+      districtId: testDistrictId,
+      mahallaName: 'Guliston',
+      telegramBotId: 'bot_test_123',
+      telegramChatId: testChatId,
+      telegramMessageId: '99',
+      originalTimestamp: new Date('2026-08-22T08:58:30.000Z'),
+      calendarDay: '2026-08-22',
+      rawPayload: {
+        update_id: 99001,
+        message: {
+          message_id: 99,
+          date: 1787389110,
+          chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+          text: "Svet o'chdi 14-domda",
+        },
+        verbatimText: "Svet o'chdi 14-domda",
+        status: 'ACCEPTED',
+      },
+    });
+
+    await db.insert(aiOperations).values({
+      id: `aiop_${crypto.randomUUID()}`,
+      districtId: testDistrictId,
+      mahallaName: 'Guliston',
+      calendarDay: '2026-08-22',
+      operationType: 'SEMANTIC_RELEVANCE',
+      targetId: priorIntakeId,
+      pinnedProfileId: 'prof_rel_2026_08_v1',
+      contextRevision: 0,
+      snapshotFingerprint: 'prior_fp',
+      finalStatus: 'COMPLETED_RELEVANT',
+      resultPayload: {
+        is_relevant: true,
+        relevant_lanes: ['ELECTRICITY'],
+        exclusion_reason: null,
+        accepted_message_ids: ['99'],
+        reasoning: 'Electricity outage reported in Guliston',
+      },
+    });
+
     const key = `${testDistrictId}:Guliston:2026-08-22`;
     customEvidenceStore.set(key, [
       {
@@ -511,14 +554,7 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
     expect(calls[0]!.userPrompt).toContain("Svet o'chdi 14-domda");
   });
 
-  it('Matrix #15: Ambiguous Fragment without Context excluded as UNRESOLVED_AMBIGUOUS_FRAGMENT', async () => {
-    aiController.mockAdapter.setNextResponse({
-      is_relevant: false,
-      relevant_lanes: [],
-      exclusion_reason: 'UNRESOLVED_AMBIGUOUS_FRAGMENT',
-      reasoning: 'Ambiguous fragment without linking same-day context',
-    });
-
+  it('Matrix #15: Ambiguous Fragment without Context or Chain excluded deterministically without LLM call', async () => {
     const text = 'Bizdayam shu ahvol';
     const intakeId = await createTestIntake(text, '115');
     await processCandidateJob(intakeId, text, '115');
@@ -526,7 +562,8 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
     const op = await waitForOperation(intakeId);
     expect(op).toBeDefined();
     expect(op.finalStatus).toBe('COMPLETED_IRRELEVANT');
-    expect((op.resultPayload as any).exclusion_reason).toBe('UNRESOLVED_AMBIGUOUS_FRAGMENT');
+    expect((op.resultPayload as any).exclusion_reason).toBe('GENERAL_CHATTER');
+    expect(aiController.mockAdapter.getCalls()).toHaveLength(0);
   });
 
   it('Matrix #16: Self-Contained Reply to Forwarded Parent qualifies without parent text (AC 6)', async () => {
@@ -733,6 +770,49 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
   });
 
   it('Matrix #24: Deterministic Context Ordering Check (09:00 -> 09:30 -> 10:00) (AC 5)', async () => {
+    const priorIntakeId = `intk_prior_${crypto.randomUUID()}`;
+    await db.insert(telegramIntakeRecords).values({
+      id: priorIntakeId,
+      districtId: testDistrictId,
+      mahallaName: 'Guliston',
+      telegramBotId: 'bot_test_123',
+      telegramChatId: testChatId,
+      telegramMessageId: '101',
+      originalTimestamp: new Date('2026-08-22T08:58:30.000Z'),
+      calendarDay: '2026-08-22',
+      rawPayload: {
+        update_id: 101001,
+        message: {
+          message_id: 101,
+          date: 1787389110,
+          chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+          text: "Elektr 9da o'chdi",
+        },
+        verbatimText: "Elektr 9da o'chdi",
+        status: 'ACCEPTED',
+      },
+    });
+
+    await db.insert(aiOperations).values({
+      id: `aiop_${crypto.randomUUID()}`,
+      districtId: testDistrictId,
+      mahallaName: 'Guliston',
+      calendarDay: '2026-08-22',
+      operationType: 'SEMANTIC_RELEVANCE',
+      targetId: priorIntakeId,
+      pinnedProfileId: 'prof_rel_2026_08_v1',
+      contextRevision: 0,
+      snapshotFingerprint: 'prior_fp',
+      finalStatus: 'COMPLETED_RELEVANT',
+      resultPayload: {
+        is_relevant: true,
+        relevant_lanes: ['ELECTRICITY'],
+        exclusion_reason: null,
+        accepted_message_ids: ['101'],
+        reasoning: "Elektr 9da o'chdi",
+      },
+    });
+
     const key = `${testDistrictId}:Guliston:2026-08-22`;
     customEvidenceStore.set(key, [
       {
@@ -1285,5 +1365,365 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
     expect(lastCall?.userPrompt).toContain('### IMMEDIATE PRECEDING MESSAGE (N-1 IN CHAT)');
     expect(lastCall?.userPrompt).toContain(CANONICAL_RESOLVER_PICKS);
     expect(lastCall?.userPrompt).not.toContain(OUTLIER_WOULD_PICK);
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // 3-Tier Deterministic Pre-Filtering Gate (Token Efficiency Refactor)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  describe('3-Tier Deterministic Pre-Filtering Gate (Token Efficiency Refactor)', () => {
+    it('Short-circuits keywordless general chatter deterministically with 0 AI LLM calls', async () => {
+      const text = "Bugun ob-havo juda ajoyib bo'ldi, sayrga chiqdik";
+      const intakeId = await createTestIntake(text, '2001');
+      await processCandidateJob(intakeId, text, '2001');
+
+      const op = await waitForOperation(intakeId);
+      expect(op).toBeDefined();
+      expect(op.finalStatus).toBe('COMPLETED_IRRELEVANT');
+      expect((op.resultPayload as any).is_relevant).toBe(false);
+      expect((op.resultPayload as any).exclusion_reason).toBe('GENERAL_CHATTER');
+      expect((op.resultPayload as any).reasoning).toContain('Deterministic prefilter');
+      expect(aiController.mockAdapter.getCalls()).toHaveLength(0);
+
+      const [rec] = await db
+        .select()
+        .from(telegramIntakeRecords)
+        .where(eq(telegramIntakeRecords.id, intakeId));
+      expect((rec?.rawPayload as any)?.status).toBe('EXCLUDED');
+      expect((rec?.rawPayload as any)?.exclusionReason).toBe('GENERAL_CHATTER');
+    });
+
+    it('Gate 1: direct reply to an accepted evidence message passes to AI analysis even without keywords', async () => {
+      const parentIntakeId = `intk_parent_${crypto.randomUUID()}`;
+      await db.insert(telegramIntakeRecords).values({
+        id: parentIntakeId,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        telegramBotId: 'bot_test_123',
+        telegramChatId: testChatId,
+        telegramMessageId: '2100',
+        originalTimestamp: new Date('2026-08-22T08:50:00.000Z'),
+        calendarDay: '2026-08-22',
+        rawPayload: {
+          update_id: 210001,
+          message: {
+            message_id: 2100,
+            date: 1787388600,
+            chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+            text: "Ko'chamizda svet o'chdi 14-domda",
+          },
+          verbatimText: "Ko'chamizda svet o'chdi 14-domda",
+          status: 'ACCEPTED',
+        },
+      });
+
+      await db.insert(aiOperations).values({
+        id: `aiop_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        calendarDay: '2026-08-22',
+        operationType: 'SEMANTIC_RELEVANCE',
+        targetId: parentIntakeId,
+        pinnedProfileId: 'prof_rel_2026_08_v1',
+        contextRevision: 0,
+        snapshotFingerprint: 'parent_fp',
+        finalStatus: 'COMPLETED_RELEVANT',
+        resultPayload: {
+          is_relevant: true,
+          relevant_lanes: ['ELECTRICITY'],
+          exclusion_reason: null,
+          accepted_message_ids: ['2100'],
+          reasoning: 'Electricity outage reported in Guliston',
+        },
+      });
+
+      aiController.mockAdapter.setNextResponse({
+        is_relevant: true,
+        relevant_lanes: ['ELECTRICITY'],
+        exclusion_reason: null,
+        reasoning: 'Reply corroborating parent electricity outage',
+      });
+
+      const text = "Rostdan ham shunaqa bo'ldi";
+      const candidateIntakeId = await createTestIntake(text, '2101');
+      await processCandidateJob(candidateIntakeId, text, '2101', {
+        replyToMessageId: '2100',
+        replyToIsForwarded: false,
+        replyToIsBot: false,
+      });
+
+      const op = await waitForOperation(candidateIntakeId);
+      expect(op).toBeDefined();
+      expect(op.finalStatus).toBe('COMPLETED_RELEVANT');
+      expect(aiController.mockAdapter.getCalls().length).toBeGreaterThan(0);
+    });
+
+    it('Gate 3: active 3-minute follow-up daisy chain passes to AI analysis without keywords or reply', async () => {
+      const priorIntakeId = `intk_prior_${crypto.randomUUID()}`;
+      await db.insert(telegramIntakeRecords).values({
+        id: priorIntakeId,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        telegramBotId: 'bot_test_123',
+        telegramChatId: testChatId,
+        telegramMessageId: '3001',
+        originalTimestamp: new Date('2026-08-22T08:58:30.000Z'),
+        calendarDay: '2026-08-22',
+        rawPayload: {
+          update_id: 300101,
+          message: {
+            message_id: 3001,
+            date: 1787389110,
+            chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+            text: 'Gaz bosimi tushib ketdi, qachon tuzaladi?',
+          },
+          verbatimText: 'Gaz bosimi tushib ketdi, qachon tuzaladi?',
+          status: 'ACCEPTED',
+        },
+      });
+
+      await db.insert(aiOperations).values({
+        id: `aiop_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        calendarDay: '2026-08-22',
+        operationType: 'SEMANTIC_RELEVANCE',
+        targetId: priorIntakeId,
+        pinnedProfileId: 'prof_rel_2026_08_v1',
+        contextRevision: 0,
+        snapshotFingerprint: 'prior_fp_gas',
+        finalStatus: 'COMPLETED_RELEVANT',
+        resultPayload: {
+          is_relevant: true,
+          relevant_lanes: ['GAS'],
+          exclusion_reason: null,
+          accepted_message_ids: ['3001'],
+          reasoning: 'Gas pressure issue in Guliston',
+        },
+      });
+
+      aiController.mockAdapter.setNextResponse({
+        is_relevant: true,
+        relevant_lanes: ['GAS'],
+        exclusion_reason: null,
+        reasoning: 'Corroborating gas pressure failure in active chain',
+      });
+
+      const text = "Bizdayam yo'q";
+      const candidateIntakeId = await createTestIntake(text, '3002');
+      await processCandidateJob(candidateIntakeId, text, '3002');
+
+      const op = await waitForOperation(candidateIntakeId);
+      expect(op).toBeDefined();
+      expect(op.finalStatus).toBe('COMPLETED_RELEVANT');
+      expect((op.resultPayload as any).relevant_lanes).toEqual(['GAS']);
+      expect(aiController.mockAdapter.getCalls().length).toBeGreaterThan(0);
+    });
+
+    it('Gate 3 broken chain: intervening excluded message breaks the chain and short-circuits with 0 AI calls', async () => {
+      // 1. Root accepted message 2 minutes ago
+      const rootIntakeId = `intk_root_${crypto.randomUUID()}`;
+      await db.insert(telegramIntakeRecords).values({
+        id: rootIntakeId,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        telegramBotId: 'bot_test_123',
+        telegramChatId: testChatId,
+        telegramMessageId: '4001',
+        originalTimestamp: new Date('2026-08-22T08:58:00.000Z'),
+        calendarDay: '2026-08-22',
+        rawPayload: {
+          update_id: 400101,
+          message: {
+            message_id: 4001,
+            date: 1787389080,
+            chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+            text: "Ko'chamizda suv to'xtab qoldi",
+          },
+          verbatimText: "Ko'chamizda suv to'xtab qoldi",
+          status: 'ACCEPTED',
+        },
+      });
+
+      await db.insert(aiOperations).values({
+        id: `aiop_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        calendarDay: '2026-08-22',
+        operationType: 'SEMANTIC_RELEVANCE',
+        targetId: rootIntakeId,
+        pinnedProfileId: 'prof_rel_2026_08_v1',
+        contextRevision: 0,
+        snapshotFingerprint: 'root_fp',
+        finalStatus: 'COMPLETED_RELEVANT',
+        resultPayload: {
+          is_relevant: true,
+          relevant_lanes: ['WATER'],
+          exclusion_reason: null,
+          accepted_message_ids: ['4001'],
+          reasoning: 'Water outage',
+        },
+      });
+
+      // 2. Intervening excluded message 1 minute ago (chatter breaking the chain)
+      const interveningIntakeId = `intk_intervening_${crypto.randomUUID()}`;
+      await db.insert(telegramIntakeRecords).values({
+        id: interveningIntakeId,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        telegramBotId: 'bot_test_123',
+        telegramChatId: testChatId,
+        telegramMessageId: '4002',
+        originalTimestamp: new Date('2026-08-22T08:59:00.000Z'),
+        calendarDay: '2026-08-22',
+        rawPayload: {
+          update_id: 400201,
+          message: {
+            message_id: 4002,
+            date: 1787389140,
+            chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+            text: 'Rahmat katta',
+          },
+          verbatimText: 'Rahmat katta',
+          status: 'EXCLUDED',
+          exclusionReason: 'GENERAL_CHATTER',
+        },
+      });
+
+      await db.insert(aiOperations).values({
+        id: `aiop_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        calendarDay: '2026-08-22',
+        operationType: 'SEMANTIC_RELEVANCE',
+        targetId: interveningIntakeId,
+        pinnedProfileId: 'prof_rel_2026_08_v1',
+        contextRevision: 0,
+        snapshotFingerprint: 'intervening_fp',
+        finalStatus: 'COMPLETED_IRRELEVANT',
+        resultPayload: {
+          is_relevant: false,
+          relevant_lanes: [],
+          exclusion_reason: 'GENERAL_CHATTER',
+          accepted_message_ids: [],
+          reasoning: 'Gratitude chatter',
+        },
+      });
+
+      // 3. Candidate arrives with unkeyed text
+      const candidateText = "Bizdayam yo'q";
+      const candidateIntakeId = await createTestIntake(candidateText, '4003');
+      await processCandidateJob(candidateIntakeId, candidateText, '4003');
+
+      const op = await waitForOperation(candidateIntakeId);
+      expect(op).toBeDefined();
+      expect(op.finalStatus).toBe('COMPLETED_IRRELEVANT');
+      expect((op.resultPayload as any).is_relevant).toBe(false);
+      expect((op.resultPayload as any).exclusion_reason).toBe('GENERAL_CHATTER');
+      expect(aiController.mockAdapter.getCalls()).toHaveLength(0);
+    });
+
+    it('Gate 3 chain limit: consecutive unkeyed count is capped at 5', async () => {
+      // Root keyed message
+      const rootIntakeId = `intk_root_chain_${crypto.randomUUID()}`;
+      await db.insert(telegramIntakeRecords).values({
+        id: rootIntakeId,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        telegramBotId: 'bot_test_123',
+        telegramChatId: testChatId,
+        telegramMessageId: '5000',
+        originalTimestamp: new Date('2026-08-22T08:57:30.000Z'),
+        calendarDay: '2026-08-22',
+        rawPayload: {
+          update_id: 500001,
+          message: {
+            message_id: 5000,
+            date: 1787389050,
+            chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+            text: "Elektr o'chdi butun mahallada",
+          },
+          verbatimText: "Elektr o'chdi butun mahallada",
+          status: 'ACCEPTED',
+        },
+      });
+      await db.insert(aiOperations).values({
+        id: `aiop_${crypto.randomUUID()}`,
+        districtId: testDistrictId,
+        mahallaName: 'Guliston',
+        calendarDay: '2026-08-22',
+        operationType: 'SEMANTIC_RELEVANCE',
+        targetId: rootIntakeId,
+        pinnedProfileId: 'prof_rel_2026_08_v1',
+        contextRevision: 0,
+        snapshotFingerprint: 'root_fp_el',
+        finalStatus: 'COMPLETED_RELEVANT',
+        resultPayload: {
+          is_relevant: true,
+          relevant_lanes: ['ELECTRICITY'],
+          exclusion_reason: null,
+          accepted_message_ids: ['5000'],
+          reasoning: 'Root electricity outage',
+        },
+      });
+
+      // Insert 5 consecutive unkeyed corroborations
+      for (let i = 1; i <= 5; i++) {
+        const unkeyedId = `intk_unkeyed_${i}_${crypto.randomUUID()}`;
+        const sec = 30 + i * 5;
+        await db.insert(telegramIntakeRecords).values({
+          id: unkeyedId,
+          districtId: testDistrictId,
+          mahallaName: 'Guliston',
+          telegramBotId: 'bot_test_123',
+          telegramChatId: testChatId,
+          telegramMessageId: `500${i}`,
+          originalTimestamp: new Date(`2026-08-22T08:57:${sec}.000Z`),
+          calendarDay: '2026-08-22',
+          rawPayload: {
+            update_id: 500001 + i,
+            message: {
+              message_id: 5000 + i,
+              date: 1787389050 + i * 5,
+              chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+              text: "Bizdayam yo'q",
+            },
+            verbatimText: "Bizdayam yo'q",
+            status: 'ACCEPTED',
+          },
+        });
+        await db.insert(aiOperations).values({
+          id: `aiop_${crypto.randomUUID()}`,
+          districtId: testDistrictId,
+          mahallaName: 'Guliston',
+          calendarDay: '2026-08-22',
+          operationType: 'SEMANTIC_RELEVANCE',
+          targetId: unkeyedId,
+          pinnedProfileId: 'prof_rel_2026_08_v1',
+          contextRevision: 0,
+          snapshotFingerprint: `unkeyed_fp_${i}`,
+          finalStatus: 'COMPLETED_RELEVANT',
+          resultPayload: {
+            is_relevant: true,
+            relevant_lanes: ['ELECTRICITY'],
+            exclusion_reason: null,
+            accepted_message_ids: [`500${i}`],
+            reasoning: 'Unkeyed corroboration',
+          },
+        });
+      }
+
+      // 6th unkeyed message exceeds chain limit (5)
+      const candidateText = "Haliyam yo'q";
+      const candidateIntakeId = await createTestIntake(candidateText, '5006');
+      await processCandidateJob(candidateIntakeId, candidateText, '5006');
+
+      const op = await waitForOperation(candidateIntakeId);
+      expect(op).toBeDefined();
+      expect(op.finalStatus).toBe('COMPLETED_IRRELEVANT');
+      expect((op.resultPayload as any).is_relevant).toBe(false);
+      expect((op.resultPayload as any).exclusion_reason).toBe('GENERAL_CHATTER');
+      expect(aiController.mockAdapter.getCalls()).toHaveLength(0);
+    });
   });
 });

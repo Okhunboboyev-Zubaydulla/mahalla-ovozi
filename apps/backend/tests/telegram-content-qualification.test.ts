@@ -7,6 +7,8 @@ import {
   isTelegramServiceMessage,
   extractReplyMetadata,
   hasSelfContainedCivicSignal,
+  matchesCivicLaneKeyword,
+  CIVIC_LANE_KEYWORD_REGEX,
   type TelegramMessage,
   type TelegramIntakeRecordInput,
 } from '../src/modules/telegram-intake/telegram-content-qualification.js';
@@ -704,4 +706,187 @@ describe('Story 2.2: Telegram Content Qualification Engine Unit Tests', () => {
       expect(hasSelfContainedCivicSignal('chiqindi')).toBe(false);
     });
   });
+
+  describe('matchesCivicLaneKeyword', () => {
+    it('exports CIVIC_LANE_KEYWORD_REGEX with Unicode and case-insensitive flags', () => {
+      expect(CIVIC_LANE_KEYWORD_REGEX).toBeInstanceOf(RegExp);
+      expect(CIVIC_LANE_KEYWORD_REGEX.unicode).toBe(true);
+      expect(CIVIC_LANE_KEYWORD_REGEX.ignoreCase).toBe(true);
+    });
+
+    describe('Positive matches across all 5 canonical lanes in Latin, Cyrillic, and Russian', () => {
+      it('matches Gaz lane keywords: gaz, газ', () => {
+        expect(matchesCivicLaneKeyword('gaz')).toBe(true);
+        expect(matchesCivicLaneKeyword('Mahallada gaz bosimi juda past')).toBe(true);
+        expect(matchesCivicLaneKeyword('газ')).toBe(true);
+        expect(matchesCivicLaneKeyword('Бизда газ ўчди')).toBe(true);
+        expect(matchesCivicLaneKeyword('газ йўқ')).toBe(true);
+        expect(matchesCivicLaneKeyword('ГАЗ ТАЪМИНОТИ')).toBe(true);
+      });
+
+      it('matches Elektr lane keywords: svet, свет, svyet, свьет, chiroq, чироқ, чирок', () => {
+        expect(matchesCivicLaneKeyword('svet')).toBe(true);
+        expect(matchesCivicLaneKeyword("Bizda svet o'chdi")).toBe(true);
+        expect(matchesCivicLaneKeyword('bugun svet bormi?')).toBe(true);
+        expect(matchesCivicLaneKeyword('свет')).toBe(true);
+        expect(matchesCivicLaneKeyword('свет отключили')).toBe(true);
+        expect(matchesCivicLaneKeyword('свет йўқ')).toBe(true);
+        expect(matchesCivicLaneKeyword('svyet')).toBe(true);
+        expect(matchesCivicLaneKeyword('svyet qachon keladi?')).toBe(true);
+        expect(matchesCivicLaneKeyword('свьет')).toBe(true);
+        expect(matchesCivicLaneKeyword('свьет йук')).toBe(true);
+        expect(matchesCivicLaneKeyword('chiroq')).toBe(true);
+        expect(matchesCivicLaneKeyword("chiroq o'chib qoldi")).toBe(true);
+        expect(matchesCivicLaneKeyword('чироқ')).toBe(true);
+        expect(matchesCivicLaneKeyword('чироқ ёнмаяпти')).toBe(true);
+        expect(matchesCivicLaneKeyword('чирок')).toBe(true);
+        expect(matchesCivicLaneKeyword('чирок учди')).toBe(true);
+      });
+
+      it('matches Suv lane keywords: suv, сув, voda, вода', () => {
+        expect(matchesCivicLaneKeyword('suv')).toBe(true);
+        expect(matchesCivicLaneKeyword("suv to'xtab qoldi")).toBe(true);
+        expect(matchesCivicLaneKeyword("sovuq suv yo'q")).toBe(true);
+        expect(matchesCivicLaneKeyword('сув')).toBe(true);
+        expect(matchesCivicLaneKeyword('сув босими паст')).toBe(true);
+        expect(matchesCivicLaneKeyword('совуқ сув йўқ')).toBe(true);
+        expect(matchesCivicLaneKeyword('voda')).toBe(true);
+        expect(matchesCivicLaneKeyword('goryachaya voda propala')).toBe(true);
+        expect(matchesCivicLaneKeyword('вода')).toBe(true);
+        expect(matchesCivicLaneKeyword('холодная вода отключена')).toBe(true);
+      });
+
+      it('matches Chiqindi lane keywords: musor, мусор, musr, musir, chiqindi, чиқинди, axlat, ахлат, svalka, свалка', () => {
+        expect(matchesCivicLaneKeyword('musor')).toBe(true);
+        expect(matchesCivicLaneKeyword("musor to'planib ketdi")).toBe(true);
+        expect(matchesCivicLaneKeyword('мусор')).toBe(true);
+        expect(matchesCivicLaneKeyword('мусор не вывозят')).toBe(true);
+        expect(matchesCivicLaneKeyword('musr')).toBe(true);
+        expect(matchesCivicLaneKeyword('musr qachon olib ketiladi?')).toBe(true);
+        expect(matchesCivicLaneKeyword('musir')).toBe(true);
+        expect(matchesCivicLaneKeyword('musir mashinasi kelmadi')).toBe(true);
+        expect(matchesCivicLaneKeyword('мусир')).toBe(true);
+        expect(matchesCivicLaneKeyword('мусир машинаси келмади')).toBe(true);
+        expect(matchesCivicLaneKeyword('chiqindi')).toBe(true);
+        expect(matchesCivicLaneKeyword("chiqindi qutilari to'lib ketdi")).toBe(true);
+        expect(matchesCivicLaneKeyword('чиқинди')).toBe(true);
+        expect(matchesCivicLaneKeyword('кўчада чиқинди тўлиб кетди')).toBe(true);
+        expect(matchesCivicLaneKeyword('axlat')).toBe(true);
+        expect(matchesCivicLaneKeyword("ko'chada axlat uyulib yotibdi")).toBe(true);
+        expect(matchesCivicLaneKeyword('ахлат')).toBe(true);
+        expect(matchesCivicLaneKeyword('ахлат олиб кетилмади')).toBe(true);
+        expect(matchesCivicLaneKeyword('svalka')).toBe(true);
+        expect(matchesCivicLaneKeyword("bu yer svalka bo'lib qoldi")).toBe(true);
+        expect(matchesCivicLaneKeyword('свалка')).toBe(true);
+        expect(matchesCivicLaneKeyword('свалка прямо возле дома')).toBe(true);
+      });
+
+      it('matches Hokimiyat lane keywords: hokim, ҳоким, tepadagilar, тепадагилар, yuqoridagilar, юқоридагилар', () => {
+        expect(matchesCivicLaneKeyword('hokim')).toBe(true);
+        expect(matchesCivicLaneKeyword('hokim qabuliga yozildik')).toBe(true);
+        expect(matchesCivicLaneKeyword('ҳоким')).toBe(true);
+        expect(matchesCivicLaneKeyword('ҳоким келиб кетди')).toBe(true);
+        expect(matchesCivicLaneKeyword('tepadagilar')).toBe(true);
+        expect(matchesCivicLaneKeyword("tepadagilar e'tibor bermayapti")).toBe(true);
+        expect(matchesCivicLaneKeyword('тепадагилар')).toBe(true);
+        expect(matchesCivicLaneKeyword('тепадагилар қачон қарайди')).toBe(true);
+        expect(matchesCivicLaneKeyword('yuqoridagilar')).toBe(true);
+        expect(matchesCivicLaneKeyword('yuqoridagilar bilishi kerak')).toBe(true);
+        expect(matchesCivicLaneKeyword('юқоридагилар')).toBe(true);
+        expect(matchesCivicLaneKeyword('юқоридагилар ёрдам берсин')).toBe(true);
+      });
+    });
+
+    describe('Negative matches strictly preventing substring collisions', () => {
+      it('rejects substring false positives for gaz (magazin, gazel, gazon, etc.)', () => {
+        expect(matchesCivicLaneKeyword('magazin')).toBe(false);
+        expect(matchesCivicLaneKeyword('Yangi magazin ochildi')).toBe(false);
+        expect(matchesCivicLaneKeyword('gazel')).toBe(false);
+        expect(matchesCivicLaneKeyword('Gazel yuk mashinasi keldi')).toBe(false);
+        expect(matchesCivicLaneKeyword('gazon')).toBe(false);
+        expect(matchesCivicLaneKeyword('Gazon ekildi')).toBe(false);
+        expect(matchesCivicLaneKeyword('магазин')).toBe(false);
+        expect(matchesCivicLaneKeyword('магазин очяпмиз')).toBe(false);
+        expect(matchesCivicLaneKeyword('газель')).toBe(false);
+        expect(matchesCivicLaneKeyword('газель сотилади')).toBe(false);
+        expect(matchesCivicLaneKeyword('газон')).toBe(false);
+        expect(matchesCivicLaneKeyword('янги газон')).toBe(false);
+      });
+
+      it('rejects substring false positives for suv (suvoq, suvoqchi, suvarak, etc.)', () => {
+        expect(matchesCivicLaneKeyword('suvoq')).toBe(false);
+        expect(matchesCivicLaneKeyword('Devor suvoq qilindi')).toBe(false);
+        expect(matchesCivicLaneKeyword('suvoqchi')).toBe(false);
+        expect(matchesCivicLaneKeyword('Usta suvoqchi kerak')).toBe(false);
+        expect(matchesCivicLaneKeyword('suvarak')).toBe(false);
+        expect(matchesCivicLaneKeyword("Uyda suvarak paydo bo'ldi")).toBe(false);
+        expect(matchesCivicLaneKeyword('сувоқ')).toBe(false);
+        expect(matchesCivicLaneKeyword('сувоқ ишлари')).toBe(false);
+        expect(matchesCivicLaneKeyword('сувоқчи')).toBe(false);
+        expect(matchesCivicLaneKeyword('сувоқчи керак')).toBe(false);
+        expect(matchesCivicLaneKeyword('суварак')).toBe(false);
+        expect(matchesCivicLaneKeyword('суварак дориси')).toBe(false);
+      });
+
+      it('rejects non-civic chat messages, empty input, and whitespace', () => {
+        expect(matchesCivicLaneKeyword('')).toBe(false);
+        expect(matchesCivicLaneKeyword('   \n\t  ')).toBe(false);
+        expect(matchesCivicLaneKeyword(null as unknown as string)).toBe(false);
+        expect(matchesCivicLaneKeyword(undefined as unknown as string)).toBe(false);
+        expect(matchesCivicLaneKeyword('Salom hammaga, qandaysizlar?')).toBe(false);
+        expect(matchesCivicLaneKeyword('Ertaga soat 10:00 da majlis')).toBe(false);
+        expect(matchesCivicLaneKeyword('Rahmat katta')).toBe(false);
+      });
+    });
+
+    describe('Mixed punctuation, emojis, newlines, and case formatting', () => {
+      it('matches keywords surrounded by punctuation, quotes, brackets, and underscores', () => {
+        expect(matchesCivicLaneKeyword('(gaz)')).toBe(true);
+        expect(matchesCivicLaneKeyword('[svet]')).toBe(true);
+        expect(matchesCivicLaneKeyword('{suv}')).toBe(true);
+        expect(matchesCivicLaneKeyword('«ҳоким»')).toBe(true);
+        expect(matchesCivicLaneKeyword('"musor"')).toBe(true);
+        expect(matchesCivicLaneKeyword('musor... kelmadi')).toBe(true);
+        expect(matchesCivicLaneKeyword("chiqindi? yo'q")).toBe(true);
+        expect(matchesCivicLaneKeyword('suv! suv! suv!')).toBe(true);
+        expect(matchesCivicLaneKeyword('_gaz_')).toBe(true);
+        expect(matchesCivicLaneKeyword('gaz: past')).toBe(true);
+        expect(matchesCivicLaneKeyword('svet; uchdi')).toBe(true);
+      });
+
+      it('matches keywords adjacent to emojis', () => {
+        expect(matchesCivicLaneKeyword("🔥gaz yo'q!")).toBe(true);
+        expect(matchesCivicLaneKeyword("svet💡o'chdi")).toBe(true);
+        expect(matchesCivicLaneKeyword("🚰 suv qachon bo'ladi?")).toBe(true);
+        expect(matchesCivicLaneKeyword("🗑️ musor to'ldi")).toBe(true);
+        expect(matchesCivicLaneKeyword("gaz🔥")).toBe(true);
+      });
+
+      it('matches keywords across newlines and tabs', () => {
+        expect(matchesCivicLaneKeyword('Bugun\ngaz\nkelmadi')).toBe(true);
+        expect(matchesCivicLaneKeyword('\t\tsvet\t\t')).toBe(true);
+        expect(matchesCivicLaneKeyword('\n\nsuv\n\n')).toBe(true);
+      });
+
+      it('matches uppercase and titlecase variants case-insensitively', () => {
+        expect(matchesCivicLaneKeyword('GAZ')).toBe(true);
+        expect(matchesCivicLaneKeyword('ГАЗ')).toBe(true);
+        expect(matchesCivicLaneKeyword('SVET')).toBe(true);
+        expect(matchesCivicLaneKeyword('СВЕТ')).toBe(true);
+        expect(matchesCivicLaneKeyword('SUV')).toBe(true);
+        expect(matchesCivicLaneKeyword('СУВ')).toBe(true);
+        expect(matchesCivicLaneKeyword('VODA')).toBe(true);
+        expect(matchesCivicLaneKeyword('ВОДА')).toBe(true);
+        expect(matchesCivicLaneKeyword('MUSOR')).toBe(true);
+        expect(matchesCivicLaneKeyword('МУСОР')).toBe(true);
+        expect(matchesCivicLaneKeyword('HOKIM')).toBe(true);
+        expect(matchesCivicLaneKeyword('ҲОКИМ')).toBe(true);
+        expect(matchesCivicLaneKeyword('TEPADAGILAR')).toBe(true);
+        expect(matchesCivicLaneKeyword('ТЕПАДАГИЛАР')).toBe(true);
+        expect(matchesCivicLaneKeyword('YUQORIDAGILAR')).toBe(true);
+        expect(matchesCivicLaneKeyword('ЮҚОРИДАГИЛАР')).toBe(true);
+      });
+    });
+  });
 });
+

@@ -497,4 +497,27 @@ export function hasSelfContainedCivicSignal(text: string): boolean {
   return CIVIC_SUBJECT_REGEX.test(trimmed) && CIVIC_PREDICATE_REGEX.test(trimmed);
 }
 
+export const CIVIC_LANE_KEYWORD_REGEX =
+  /(?:^|[^\p{L}\p{N}])(gaz(?!el|on)[a-z]*|газ(?!ель|он)[а-я]*|svet[a-z]*|свет[а-я]*|svyet[a-z]*|свьет[а-я]*|chiro[qg]['`ʻʼ]?[a-z]*|чиро[қк][а-я]*|elektr[a-z]*|электр[а-я]*|tok|ток|voltaj|вольтаж|napryajeni[a-z]*|напряжени[а-я]*|suv(?!oq|arak)[a-z]*|сув(?!оқ|арак)[а-я]*|voda|вод[аыеуой][а-я]*|водопровод[а-я]*|vodoprovod[a-z]*|kanalizatsiy[a-z]*|канализаци[а-я]*|truba[a-z]*|труба[а-я]*|musor[a-z]*|мусор[а-я]*|musr[a-z]*|муср[а-я]*|musir[a-z]*|мусир[а-я]*|chiqindi[a-z]*|чиқинди[а-я]*|axlat[a-z]*|ахлат[а-я]*|svalka[a-z]*|свалка[а-я]*|hokim[a-z]*|ҳоким[а-я]*|хоким[а-я]*|xokim[a-z]*|tepadagilar[a-z]*|тепадагилар[а-я]*|yuqoridagilar[a-z]*|юқоридагилар[а-я]*|mas['`ʻʼ]?ul[a-z]*|масъул[а-я]*)(?:$|[^\p{L}\p{N}])/iu;
+
+/**
+ * Pure domain predicate evaluating whether text contains at least one keyword matching
+ * any of the 5 canonical civic lanes (Gaz, Elektr, Suv, Chiqindi, Hokimiyat) across
+ * Uzbek Latin, Uzbek Cyrillic, and basic Russian equivalents.
+ *
+ * Uses boundary matching to strictly eliminate false-positive substring collisions
+ * (e.g. 'magazin', 'suvoqchi', 'gazel', 'gazon', 'suvarak').
+ */
+export function matchesCivicLaneKeyword(text: string): boolean {
+  if (!text || typeof text !== 'string') {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  return CIVIC_LANE_KEYWORD_REGEX.test(trimmed);
+}
+
+
 
