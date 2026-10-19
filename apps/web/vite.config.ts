@@ -102,11 +102,11 @@ export default defineConfig(({ mode }) => {
           if (isPkg('antd') || hasPrefix('@ant-design/')) {
             return 'vendor-antd';
           }
-          // antd's headless primitives (rc-*, @rc-component/*) — mapped explicitly
-          // so they never leak into the app entry, but kept in their own chunk so
-          // the antd runtime itself stays well under the vendor ceiling.
+          // antd's headless primitives (rc-*, @rc-component/*) ride the vendor-antd
+          // chunk: they import each other bidirectionally, so a separate group
+          // creates a circular ESM import and crashes module init.
           if (hasPrefix('rc-') || hasPrefix('@rc-component/')) {
-            return 'vendor-antd-rc';
+            return 'vendor-antd';
           }
           // Drag-and-drop runtime
           if (isPkg('@dnd-kit')) {
