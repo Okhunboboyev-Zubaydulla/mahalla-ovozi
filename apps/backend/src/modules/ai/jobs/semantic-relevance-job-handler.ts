@@ -625,13 +625,12 @@ export async function processSemanticRelevanceJobs(
                 ),
             );
 
-          // Gate 3 (3-Minute Follow-up Daisy Chain in same Telegram Chat)
+          // Gate 3 (Zero-Intervention Same-Calendar-Day Follow-up Chain)
           let isGate3Match = false;
 
           if (!isGate1Match && !isGate2Match) {
             try {
               const candidateTimestamp = new Date(originalTimestamp);
-              const threeMinutesAgo = new Date(candidateTimestamp.getTime() - 3 * 60 * 1000);
 
               const recentChatRecords = await db
                 .select({
@@ -654,12 +653,13 @@ export async function processSemanticRelevanceJobs(
                   and(
                     eq(telegramIntakeRecords.districtId, districtId),
                     eq(telegramIntakeRecords.telegramChatId, telegramChatId),
-                    gt(telegramIntakeRecords.originalTimestamp, threeMinutesAgo),
+                    eq(telegramIntakeRecords.calendarDay, calendarDay),
                     lt(telegramIntakeRecords.originalTimestamp, candidateTimestamp),
+                    ne(telegramIntakeRecords.id, intakeId),
                   ),
                 )
                 .orderBy(desc(telegramIntakeRecords.originalTimestamp))
-                .limit(20);
+                .limit(50);
 
               // Filter out trivial non-content messages (service messages, empty, etc.)
               const isTrivial = (raw: unknown): boolean => {
@@ -702,38 +702,69 @@ export async function processSemanticRelevanceJobs(
 
                 const immediatelyPreceding = nonTrivial[0]!;
 
+                // Case C (Broken Chain / Intervening Chatter):
+                // If the immediately preceding message was excluded, irrelevant, or not accepted evidence:
+                // short-circuit deterministically as GENERAL_CHATTER with 0 tokens consumed.
                 if (isRelevantRecord(immediatelyPreceding) && !isExcludedRecord(immediatelyPreceding)) {
-                  let consecutiveUnkeyedCount = 0;
-                  let chainValid = true;
+                  const immText = extractVerbatimDisplayText(null, immediatelyPreceding.rawPayload) || '';
+                  const immHasKey = matchesCivicLaneKeyword(immText) || hasSelfContainedCivicSignal(immText);
 
-                  for (const rec of nonTrivial) {
-                    if (isExcludedRecord(rec)) {
-                      chainValid = false;
-                      break;
-                    }
-                    if (!isRelevantRecord(rec)) {
-                      chainValid = false;
-                      break;
-                    }
+                  if (immHasKey) {
+                    // Case A (Zero-Intervention):
+                    // The immediately preceding non-trivial intake record on the same calendar day was accepted
+                    // civic evidence, and exactly 0 intervening messages occurred in that chat (interveningCount === 0).
+                    // Admit into AI evaluation without enforcing a 3-minute hardcoded cap!
+                    isGate3Match = true;
+                  } else {
+                    // Case B (Rapid Multi-message Active Chain):
+                    // interveningCount > 0 relative to root civic anchor.
+                    // All intervening messages must be accepted evidence within the active chain,
+                    // consecutive unkeyed count <= 5, and consecutive gap <= 3 minutes.
+                    const candidateGapMs =
+                      candidateTimestamp.getTime() - immediatelyPreceding.originalTimestamp.getTime();
 
-                    const recText = extractVerbatimDisplayText(null, rec.rawPayload) || '';
-                    const hasKey =
-                      matchesCivicLaneKeyword(recText) || hasSelfContainedCivicSignal(recText);
+                    if (candidateGapMs <= 3 * 60 * 1000) {
+                      let consecutiveUnkeyedCount = 1;
+                      let chainValid = true;
+                      let foundRootAnchor = false;
+                      let previousTimestamp = immediatelyPreceding.originalTimestamp;
 
-                    if (hasKey) {
-                      // Found the root keyed anchor for this active corroboration chain
-                      break;
-                    } else {
-                      consecutiveUnkeyedCount++;
-                      if (consecutiveUnkeyedCount >= 5) {
-                        chainValid = false;
-                        break;
+                      for (let i = 1; i < nonTrivial.length; i++) {
+                        const rec = nonTrivial[i]!;
+
+                        if (isExcludedRecord(rec) || !isRelevantRecord(rec)) {
+                          chainValid = false;
+                          break;
+                        }
+
+                        const stepGapMs =
+                          previousTimestamp.getTime() - rec.originalTimestamp.getTime();
+                        if (stepGapMs > 3 * 60 * 1000) {
+                          chainValid = false;
+                          break;
+                        }
+                        previousTimestamp = rec.originalTimestamp;
+
+                        const recText = extractVerbatimDisplayText(null, rec.rawPayload) || '';
+                        const hasKey =
+                          matchesCivicLaneKeyword(recText) || hasSelfContainedCivicSignal(recText);
+
+                        if (hasKey) {
+                          foundRootAnchor = true;
+                          break;
+                        } else {
+                          consecutiveUnkeyedCount++;
+                          if (consecutiveUnkeyedCount >= 5) {
+                            chainValid = false;
+                            break;
+                          }
+                        }
+                      }
+
+                      if (chainValid && foundRootAnchor && consecutiveUnkeyedCount <= 5) {
+                        isGate3Match = true;
                       }
                     }
-                  }
-
-                  if (chainValid && consecutiveUnkeyedCount <= 5) {
-                    isGate3Match = true;
                   }
                 }
               }
@@ -770,7 +801,7 @@ export async function processSemanticRelevanceJobs(
             const fallbackProfileId = activeProfile?.id ?? 'prof_rel_default';
             const finalExclusionReason: ExclusionReason = 'GENERAL_CHATTER';
             const fastFailReasoning =
-              'Deterministic prefilter: No civic keywords, direct evidence reply, or active 3-minute corroboration chain';
+              'Deterministic prefilter: No civic keywords, direct evidence reply, or active corroboration chain';
 
             const allBurstIntakes =
               burstMessages && burstMessages.length > 0
@@ -917,7 +948,7 @@ export async function processSemanticRelevanceJobs(
                 const timeDiffMs = candidateTimeMs - recentRelevantOp.originalTimestamp.getTime();
                 const isWithin15Min = timeDiffMs <= 15 * 60 * 1000;
 
-                if (interveningCount === 0 && isWithin15Min) {
+                if (interveningCount === 0 && (isWithin15Min || isGate3Match)) {
                   immediatePrecedingMessage = precedingCtx;
                   chatContinuity = {
                     interveningCount: 0,
@@ -925,7 +956,7 @@ export async function processSemanticRelevanceJobs(
                   };
                 } else {
                   chatContinuity = {
-                    interveningCount: Math.max(interveningCount, isWithin15Min ? 0 : 1),
+                    interveningCount: Math.max(interveningCount, isWithin15Min || isGate3Match ? 0 : 1),
                     precedingRelevantMessage: precedingCtx,
                   };
                 }
