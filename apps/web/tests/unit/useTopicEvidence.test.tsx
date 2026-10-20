@@ -4,6 +4,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useTopicEvidence } from '../../src/topics/useTopicEvidence.js';
 import { ApiError } from '../../src/lib/api-client.js';
+import { evidenceRetryDelay } from '../../src/topics/evidence-retry.js';
 import { hokimTopicsClient } from '../../src/topics/hokim-topics-client.js';
 import { AuthProvider } from '../../src/auth/auth-context.js';
 import { authClient } from '../../src/auth/auth-client.js';
@@ -278,6 +279,42 @@ describe('Story 3.3: useTopicEvidence Synchronization & Invalidation Tests', () 
 
     expect(result.current.evidenceList[0]?.id).toBe('evi_2');
     expect(result.current.evidenceList[1]?.id).toBe('evi_1');
+  });
+
+  it('passes the shared evidenceRetryDelay ladder as the query retryDelay option', async () => {
+    const retryDelayQueryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          retryDelay: evidenceRetryDelay,
+        },
+      },
+    });
+    retryDelayQueryClient.setQueryData(['auth', 'session'], {
+      actor: mockActor,
+      session: { expiresAt: new Date(Date.now() + 3600000).toISOString() },
+    });
+
+    const getSpy = vi
+      .spyOn(hokimTopicsClient, 'getTopicEvidence')
+      .mockRejectedValue(new ApiError('Кутиш вақти тугади', 'TIMEOUT', 0, true));
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={retryDelayQueryClient}>
+        <AuthProvider>{children}</AuthProvider>
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useTopicEvidence('top_100'), { wrapper });
+
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 });
+
+    // The retry ladder itself is short and fixed (250ms then 500ms), so a single
+    // dropped socket never costs a visible 1s+ loading window.
+    expect(evidenceRetryDelay(0)).toBe(250);
+    expect(evidenceRetryDelay(1)).toBe(500);
+    expect(getSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    retryDelayQueryClient.clear();
   });
 
   it('retries a TIMEOUT exactly once via react-query before surfacing the error', async () => {

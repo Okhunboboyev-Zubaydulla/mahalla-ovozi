@@ -10,6 +10,7 @@ import {
   TopicEvidenceResponseSchema,
 } from '@mahalla-ovozi/api-contracts';
 import { request } from '../lib/api-client.js';
+import { evidenceRetryDelay } from './evidence-retry.js';
 
 export const districtTopicsClient = {
   async listTopics(
@@ -126,6 +127,7 @@ export function useDistrictTopicEvidence(
     staleTime: 5_000,
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
+    retryDelay: evidenceRetryDelay,
   });
 }
 

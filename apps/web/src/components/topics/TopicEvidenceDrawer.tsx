@@ -13,6 +13,7 @@ import { useTopicEvidence } from '../../topics/useTopicEvidence.js';
 import { useTopicReadState } from '../../hooks/useTopicReadState.js';
 import { useBottomSentinelObserver } from '../../hooks/useBottomSentinelObserver.js';
 import { getSafeScrollBehavior } from '../../lib/scrollUtils.js';
+import { useDelayedFlag } from '../../lib/use-delayed-flag.js';
 import { LANE_LABELS, LANE_STYLES } from './TopicCard.js';
 import { EvidenceTimeline } from './EvidenceTimeline.js';
 import { formatTashkentActivityTime } from '../../lib/formatters.js';
@@ -63,6 +64,10 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
   } = useTopicEvidence(topicId, { order, onInvalidated, initialTopic });
 
   const { markTopicAsRead } = useTopicReadState();
+
+  // Avoid flashing the evidence skeleton on fast responses: only show it once
+  // the empty-and-loading state has persisted for 200ms.
+  const showLoadingSkeleton = useDelayedFlag(isLoading && evidenceList.length === 0, 200);
 
   // Zero-overhead scroll position detection:
   // In ASC mode: observe bottom sentinel (detecting if scrolled away from bottom)
@@ -231,11 +236,15 @@ export const TopicEvidenceDrawer: React.FC<TopicEvidenceDrawerProps> = ({
         boxShadow: 'none',
       }}
     />
-  ) : isLoading && evidenceList.length === 0 ? (
+  ) : showLoadingSkeleton ? (
     <div style={{ padding: '12px 0' }} data-testid="evidence-timeline-skeleton">
       <Skeleton active avatar paragraph={{ rows: 3 }} />
       <Skeleton active avatar paragraph={{ rows: 3 }} style={{ marginTop: 24 }} />
     </div>
+  ) : isLoading && evidenceList.length === 0 ? (
+    // Still loading but under the 200ms skeleton delay: render nothing yet so the
+    // "no evidence" empty state never flashes while the first page is in flight.
+    null
   ) : evidenceList.length === 0 ? (
     <Empty description="Далиллар топилмади" style={{ padding: '24px 0' }} />
   ) : (

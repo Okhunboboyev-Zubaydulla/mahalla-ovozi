@@ -551,6 +551,61 @@ describe('TopicEvidenceDrawer Component Tests', () => {
     expect(screen.queryByText('Далилларни юклашда хатолик')).toBeNull();
   });
 
+  it('does not flash the skeleton for a fast response and renders rows once data arrives', async () => {
+    let resolveEvidence: (value: TopicEvidenceResponse) => void = () => {};
+    const pendingEvidence = new Promise<TopicEvidenceResponse>((resolve) => {
+      resolveEvidence = resolve;
+    });
+
+    vi.spyOn(hokimTopicsClient, 'getTopicEvidence').mockReturnValueOnce(pendingEvidence);
+
+    renderWithProviders(
+      <TopicEvidenceDrawer topicId="top_1" initialTopic={mockTopic1} onClose={vi.fn()} />,
+    );
+
+    // Loading, but well under the 200ms skeleton delay: neither the skeleton nor the
+    // "no evidence" empty state may be visible, so a fast response shows no flash.
+    expect(screen.queryByTestId('evidence-timeline-skeleton')).toBeNull();
+    expect(screen.queryByText('Далиллар топилмади')).toBeNull();
+
+    await act(async () => {
+      resolveEvidence(mockEvidenceResponse1);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('1-хабар: Сув босими пасайди.')).toBeTruthy();
+    });
+
+    expect(screen.getByText('2-хабар: Қувур ёрилиб кўчани сув босди!')).toBeTruthy();
+    expect(screen.queryByTestId('evidence-timeline-skeleton')).toBeNull();
+    expect(screen.queryByText('Далиллар топилмади')).toBeNull();
+  });
+
+  it('shows the skeleton only after 200ms of continuous loading', async () => {
+    vi.useFakeTimers();
+
+    try {
+      vi.spyOn(hokimTopicsClient, 'getTopicEvidence').mockReturnValue(
+        new Promise<TopicEvidenceResponse>(() => {}),
+      );
+
+      renderWithProviders(
+        <TopicEvidenceDrawer topicId="top_1" initialTopic={mockTopic1} onClose={vi.fn()} />,
+      );
+
+      expect(screen.queryByTestId('evidence-timeline-skeleton')).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(250);
+      });
+
+      expect(screen.getByTestId('evidence-timeline-skeleton')).toBeTruthy();
+      expect(screen.queryByText('Далиллар топилмади')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows the selection-required info message when the query is not enabled', async () => {
     authMock.current = {
       actor: {

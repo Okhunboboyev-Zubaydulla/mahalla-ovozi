@@ -10,6 +10,7 @@ import {
 import { hokimTopicsClient } from './hokim-topics-client.js';
 import { useAuth } from '../auth/auth-context.js';
 import { ApiError } from '../lib/api-client.js';
+import { evidenceRetryDelay } from './evidence-retry.js';
 
 export interface UseTopicEvidenceOptions {
   onInvalidated?: () => void;
@@ -123,6 +124,7 @@ export function useTopicEvidence(
       }
       return failureCount < effectiveRetry;
     },
+    retryDelay: evidenceRetryDelay,
     placeholderData: (previousData, previousQuery) => {
       // Retain topic metadata across order switches; clear strictly when topicId changes (AC 7)
       if (previousQuery?.queryKey[2] === (topicId || '')) {
