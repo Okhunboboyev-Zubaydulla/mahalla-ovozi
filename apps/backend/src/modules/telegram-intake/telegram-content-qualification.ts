@@ -7,8 +7,8 @@
  * Preserves verbatim text/captions without mutation and discards structural exclusions.
  */
 
-import type { TelegramReplyMetadata } from '../../adapters/jobs/boss-client.js';
-export type { TelegramReplyMetadata };
+import type { TelegramReplyMetadata, ForwardMetadata, ForwardOriginType } from '../../adapters/jobs/boss-client.js';
+export type { TelegramReplyMetadata, ForwardMetadata, ForwardOriginType };
 
 // Re-export protocol types so consumers who currently import from this module continue to compile.
 export type {
@@ -48,6 +48,7 @@ export interface StructuralCandidate {
   contentType: 'TEXT' | 'MEDIA_CAPTION';
   verbatimText: string;
   replyMetadata: TelegramReplyMetadata | null;
+  forwardMetadata: ForwardMetadata | null;
 }
 
 export type StructuralQualificationResult =
@@ -298,6 +299,133 @@ export function extractReplyMetadata(message: TelegramMessage): TelegramReplyMet
 }
 
 /**
+ * Extracts origin metadata from forwarded Telegram messages (modern Bot API 7.0+
+ * forward_origin or legacy forward fields).
+ * Returns null if the message has no forward origin information.
+ */
+export function extractForwardOriginMetadata(message: TelegramMessage): ForwardMetadata | null {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  // Modern Bot API 7.0+ forward_origin
+  const origin = message.forward_origin;
+  if (origin != null && typeof origin === 'object') {
+    if (origin.type === 'channel') {
+      const chatId = origin.chat?.id !== undefined && origin.chat?.id !== null ? String(origin.chat.id) : null;
+      const messageId =
+        origin.message_id !== undefined && origin.message_id !== null ? String(origin.message_id) : null;
+      return {
+        originChatId: chatId,
+        originMessageId: messageId,
+        originTitle: origin.chat?.title ?? null,
+        originType: 'channel',
+      };
+    }
+
+    if (origin.type === 'chat') {
+      const chatId =
+        origin.sender_chat?.id !== undefined && origin.sender_chat?.id !== null
+          ? String(origin.sender_chat.id)
+          : null;
+      return {
+        originChatId: chatId,
+        originMessageId: null,
+        originTitle: origin.sender_chat?.title ?? null,
+        originType: 'chat',
+      };
+    }
+
+    if (origin.type === 'user') {
+      const parts = [origin.sender_user?.first_name, origin.sender_user?.last_name].filter(Boolean);
+      return {
+        originChatId: null,
+        originMessageId: null,
+        originTitle: parts.length > 0 ? parts.join(' ') : null,
+        originType: 'user',
+      };
+    }
+
+    if (origin.type === 'hidden_user') {
+      return {
+        originChatId: null,
+        originMessageId: null,
+        originTitle: origin.sender_user_name ?? null,
+        originType: 'hidden_user',
+      };
+    }
+
+    return {
+      originChatId: null,
+      originMessageId: null,
+      originTitle: null,
+      originType: null,
+    };
+  }
+
+  // Legacy Bot API forward fields
+  if (message.forward_from_chat != null && typeof message.forward_from_chat === 'object') {
+    const chat = message.forward_from_chat;
+    const chatId = chat.id !== undefined && chat.id !== null ? String(chat.id) : null;
+    const messageId =
+      message.forward_from_message_id !== undefined && message.forward_from_message_id !== null
+        ? String(message.forward_from_message_id)
+        : null;
+    const originType: ForwardOriginType =
+      chat.type === 'group' || chat.type === 'supergroup' ? 'chat' : 'channel';
+    return {
+      originChatId: chatId,
+      originMessageId: messageId,
+      originTitle: chat.title ?? null,
+      originType,
+    };
+  }
+
+  if (message.forward_from != null && typeof message.forward_from === 'object') {
+    const user = message.forward_from;
+    const parts = [user.first_name, user.last_name].filter(Boolean);
+    const messageId =
+      message.forward_from_message_id !== undefined && message.forward_from_message_id !== null
+        ? String(message.forward_from_message_id)
+        : null;
+    return {
+      originChatId: null,
+      originMessageId: messageId,
+      originTitle: parts.length > 0 ? parts.join(' ') : null,
+      originType: 'user',
+    };
+  }
+
+  if (typeof message.forward_sender_name === 'string') {
+    return {
+      originChatId: null,
+      originMessageId: null,
+      originTitle: message.forward_sender_name,
+      originType: 'hidden_user',
+    };
+  }
+
+  if (
+    (message.forward_date !== undefined && message.forward_date !== null) ||
+    (message.forward_from_message_id !== undefined && message.forward_from_message_id !== null) ||
+    typeof message.forward_signature === 'string'
+  ) {
+    const messageId =
+      message.forward_from_message_id !== undefined && message.forward_from_message_id !== null
+        ? String(message.forward_from_message_id)
+        : null;
+    return {
+      originChatId: null,
+      originMessageId: messageId,
+      originTitle: null,
+      originType: null,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Pure qualification engine function.
  * Evaluates intake record and Telegram payload against structural rules in strict deterministic order.
  */
@@ -340,8 +468,8 @@ export function qualifyTelegramContent(
     return baseExclusion('MALFORMED_METADATA');
   }
 
-  // 1. Forward guard (AC 4)
-  if (isTelegramForwarded(rawMsg)) {
+  // 1. Automatic forward guard
+  if (rawMsg.is_automatic_forward === true) {
     return baseExclusion('FORWARDED_MESSAGE');
   }
 
@@ -392,6 +520,7 @@ export function qualifyTelegramContent(
           contentType: 'MEDIA_CAPTION',
           verbatimText: rawMsg.caption,
           replyMetadata: extractReplyMetadata(rawMsg),
+          forwardMetadata: extractForwardOriginMetadata(rawMsg),
         },
       };
     }
@@ -415,6 +544,7 @@ export function qualifyTelegramContent(
           contentType: 'TEXT',
           verbatimText: rawMsg.text,
           replyMetadata: extractReplyMetadata(rawMsg),
+          forwardMetadata: extractForwardOriginMetadata(rawMsg),
         },
       };
     }

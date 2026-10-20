@@ -6,6 +6,7 @@ import {
   isTelegramCommand,
   isTelegramServiceMessage,
   extractReplyMetadata,
+  extractForwardOriginMetadata,
   hasSelfContainedCivicSignal,
   matchesCivicLaneKeyword,
   CIVIC_LANE_KEYWORD_REGEX,
@@ -254,37 +255,55 @@ describe('Story 2.2: Telegram Content Qualification Engine Unit Tests', () => {
     });
   });
 
-  describe('AC 4 & Matrix #11-#14: Telegram Forwarded Messages Exclusions', () => {
-    it('excludes modern Bot API 7.0+ forward_origin user (Matrix #11)', () => {
+  describe('Controlled Forwarded Message Admission & Exclusions', () => {
+    it('admits manual channel forward with meaningful text and populates forwardMetadata', () => {
       const msg = createBaseMessage({
+        forward_origin: {
+          type: 'channel',
+          date: 1787300000,
+          chat: { id: -10088888, type: 'channel', title: 'Hududgaz Poytaxt' },
+          message_id: 42,
+        },
+        text: "E'LON: Ertaga soat 09:00 dan 18:00 gacha gaz ta'minoti vaqtincha to'xtatiladi.",
+      });
+      const record = createMockRecord({ message: msg });
+
+      const result = qualifyTelegramContent(record);
+
+      expect(result.status).toBe('SUPPORTED');
+      if (result.status === 'SUPPORTED') {
+        expect(result.candidate.contentType).toBe('TEXT');
+        expect(result.candidate.verbatimText).toBe(
+          "E'LON: Ertaga soat 09:00 dan 18:00 gacha gaz ta'minoti vaqtincha to'xtatiladi.",
+        );
+        expect(result.candidate.forwardMetadata).toEqual({
+          originChatId: '-10088888',
+          originMessageId: '42',
+          originTitle: 'Hududgaz Poytaxt',
+          originType: 'channel',
+        });
+      }
+    });
+
+    it('admits manual forward from user, chat, and hidden_user with text', () => {
+      const userMsg = createBaseMessage({
         forward_origin: {
           type: 'user',
           date: 1787300000,
           sender_user: {
             id: 999111,
             is_bot: false,
-            first_name: 'Original Author',
+            first_name: 'Original',
+            last_name: 'Author',
           },
         },
         text: 'Muhim eʼlon: gaz ochiriladi!',
       });
-      const record = createMockRecord({ message: msg });
-
-      const result = qualifyTelegramContent(record);
-
-      expect(result.status).toBe('EXCLUDED');
-      if (result.status === 'EXCLUDED') {
-        expect(result.reason).toBe('FORWARDED_MESSAGE');
-      }
-    });
-
-    it('excludes modern Bot API 7.0+ forward_origin channel, chat, hidden_user (Matrix #12)', () => {
-      const channelMsg = createBaseMessage({
+      const chatMsg = createBaseMessage({
         forward_origin: {
-          type: 'channel',
+          type: 'chat',
           date: 1787300000,
-          chat: { id: -10088888, type: 'channel', title: 'Official Channel' },
-          message_id: 42,
+          sender_chat: { id: -100999, type: 'supergroup', title: 'Neighbor Chat' },
         },
         text: 'Hokimiyat qarori',
       });
@@ -297,15 +316,131 @@ describe('Story 2.2: Telegram Content Qualification Engine Unit Tests', () => {
         text: 'Anonim xabar',
       });
 
-      expect(qualifyTelegramContent(createMockRecord({ message: channelMsg }))).toEqual(
-        expect.objectContaining({ status: 'EXCLUDED', reason: 'FORWARDED_MESSAGE' }),
+      const userRes = qualifyTelegramContent(createMockRecord({ message: userMsg }));
+      expect(userRes.status).toBe('SUPPORTED');
+      if (userRes.status === 'SUPPORTED') {
+        expect(userRes.candidate.forwardMetadata).toEqual({
+          originChatId: null,
+          originMessageId: null,
+          originTitle: 'Original Author',
+          originType: 'user',
+        });
+      }
+
+      const chatRes = qualifyTelegramContent(createMockRecord({ message: chatMsg }));
+      expect(chatRes.status).toBe('SUPPORTED');
+      if (chatRes.status === 'SUPPORTED') {
+        expect(chatRes.candidate.forwardMetadata).toEqual({
+          originChatId: '-100999',
+          originMessageId: null,
+          originTitle: 'Neighbor Chat',
+          originType: 'chat',
+        });
+      }
+
+      const hiddenRes = qualifyTelegramContent(createMockRecord({ message: hiddenMsg }));
+      expect(hiddenRes.status).toBe('SUPPORTED');
+      if (hiddenRes.status === 'SUPPORTED') {
+        expect(hiddenRes.candidate.forwardMetadata).toEqual({
+          originChatId: null,
+          originMessageId: null,
+          originTitle: 'Anonim',
+          originType: 'hidden_user',
+        });
+      }
+    });
+
+    it('admits legacy manual forward fields with text', () => {
+      const legacyChatMsg = createBaseMessage({
+        forward_date: 1787200000,
+        forward_from_chat: { id: -100777, type: 'channel', title: 'Toshkent Suv' },
+        forward_from_message_id: 123,
+        text: 'Suv jadvali yangilandi',
+      });
+      const legacyUserMsg = createBaseMessage({
+        forward_date: 1787200000,
+        forward_from: { id: 777, is_bot: false, first_name: 'Eski', last_name: 'Author' },
+        text: 'Eski forward qilingan xabar',
+      });
+
+      const legacyChatRes = qualifyTelegramContent(createMockRecord({ message: legacyChatMsg }));
+      expect(legacyChatRes.status).toBe('SUPPORTED');
+      if (legacyChatRes.status === 'SUPPORTED') {
+        expect(legacyChatRes.candidate.forwardMetadata).toEqual({
+          originChatId: '-100777',
+          originMessageId: '123',
+          originTitle: 'Toshkent Suv',
+          originType: 'channel',
+        });
+      }
+
+      const legacyUserRes = qualifyTelegramContent(createMockRecord({ message: legacyUserMsg }));
+      expect(legacyUserRes.status).toBe('SUPPORTED');
+      if (legacyUserRes.status === 'SUPPORTED') {
+        expect(legacyUserRes.candidate.forwardMetadata).toEqual({
+          originChatId: null,
+          originMessageId: null,
+          originTitle: 'Eski Author',
+          originType: 'user',
+        });
+      }
+    });
+
+    it('admits captioned forwarded media with forwardMetadata', () => {
+      const captionedPhotoMsg = createBaseMessage({
+        forward_origin: {
+          type: 'channel',
+          date: 1787300000,
+          chat: { id: -10088888, type: 'channel', title: 'Hokimiyat Media' },
+          message_id: 99,
+        },
+        photo: [{ file_id: 'p_fwd_1', width: 200, height: 200 }],
+        caption: 'Asfalt yotqizish ishlari boshlandi',
+      });
+      const result = qualifyTelegramContent(createMockRecord({ message: captionedPhotoMsg }));
+
+      expect(result.status).toBe('SUPPORTED');
+      if (result.status === 'SUPPORTED') {
+        expect(result.candidate.contentType).toBe('MEDIA_CAPTION');
+        expect(result.candidate.verbatimText).toBe('Asfalt yotqizish ishlari boshlandi');
+        expect(result.candidate.forwardMetadata).toEqual({
+          originChatId: '-10088888',
+          originMessageId: '99',
+          originTitle: 'Hokimiyat Media',
+          originType: 'channel',
+        });
+      }
+    });
+
+    it('excludes captionless forwarded photo or video as CAPTIONLESS_MEDIA', () => {
+      const captionlessPhotoMsg = createBaseMessage({
+        forward_origin: {
+          type: 'channel',
+          date: 1787300000,
+          chat: { id: -10088888, type: 'channel', title: 'Channel' },
+          message_id: 50,
+        },
+        photo: [{ file_id: 'p_captionless' }],
+      });
+      const captionlessVideoMsg = createBaseMessage({
+        forward_origin: {
+          type: 'channel',
+          date: 1787300000,
+          chat: { id: -10088888, type: 'channel', title: 'Channel' },
+          message_id: 51,
+        },
+        video: { file_id: 'v_captionless', duration: 10 },
+      });
+
+      expect(qualifyTelegramContent(createMockRecord({ message: captionlessPhotoMsg }))).toEqual(
+        expect.objectContaining({ status: 'EXCLUDED', reason: 'CAPTIONLESS_MEDIA' }),
       );
-      expect(qualifyTelegramContent(createMockRecord({ message: hiddenMsg }))).toEqual(
-        expect.objectContaining({ status: 'EXCLUDED', reason: 'FORWARDED_MESSAGE' }),
+      expect(qualifyTelegramContent(createMockRecord({ message: captionlessVideoMsg }))).toEqual(
+        expect.objectContaining({ status: 'EXCLUDED', reason: 'CAPTIONLESS_MEDIA' }),
       );
     });
 
-    it('excludes modern Bot API 7.0+ is_automatic_forward: true (Matrix #13)', () => {
+    it('excludes automatic channel forward is_automatic_forward: true as FORWARDED_MESSAGE', () => {
       const msg = createBaseMessage({
         is_automatic_forward: true,
         text: 'Avtomatik repost xabar',
@@ -320,11 +455,15 @@ describe('Story 2.2: Telegram Content Qualification Engine Unit Tests', () => {
       }
     });
 
-    it('excludes legacy forward fields (forward_date, forward_from, etc.) (Matrix #14)', () => {
+    it('excludes forwarded message with empty or whitespace-only text as EMPTY_CONTENT', () => {
       const msg = createBaseMessage({
-        forward_date: 1787200000,
-        forward_from: { id: 777, is_bot: false, first_name: 'Eski Author' },
-        text: 'Eski forward qilingan xabar',
+        forward_origin: {
+          type: 'channel',
+          date: 1787300000,
+          chat: { id: -10088888, type: 'channel', title: 'Channel' },
+          message_id: 52,
+        },
+        text: '   \n\t  ',
       });
       const record = createMockRecord({ message: msg });
 
@@ -332,7 +471,7 @@ describe('Story 2.2: Telegram Content Qualification Engine Unit Tests', () => {
 
       expect(result.status).toBe('EXCLUDED');
       if (result.status === 'EXCLUDED') {
-        expect(result.reason).toBe('FORWARDED_MESSAGE');
+        expect(result.reason).toBe('EMPTY_CONTENT');
       }
     });
   });
@@ -554,6 +693,121 @@ describe('Story 2.2: Telegram Content Qualification Engine Unit Tests', () => {
         replyToIsForwarded: false,
         replyToIsBot: true,
       });
+    });
+
+    it('evaluates extractForwardOriginMetadata correctly across modern and legacy shapes', () => {
+      expect(extractForwardOriginMetadata(createBaseMessage())).toBeNull();
+
+      // Modern channel origin
+      const channelMsg = createBaseMessage({
+        forward_origin: {
+          type: 'channel',
+          date: 1787300000,
+          chat: { id: -100111222, type: 'channel', title: 'Gas Channel' },
+          message_id: 300,
+        },
+      });
+      expect(extractForwardOriginMetadata(channelMsg)).toEqual({
+        originChatId: '-100111222',
+        originMessageId: '300',
+        originTitle: 'Gas Channel',
+        originType: 'channel',
+      });
+
+      // Modern chat origin
+      const chatMsg = createBaseMessage({
+        forward_origin: {
+          type: 'chat',
+          date: 1787300000,
+          sender_chat: { id: -100333444, type: 'supergroup', title: 'Public Group' },
+        },
+      });
+      expect(extractForwardOriginMetadata(chatMsg)).toEqual({
+        originChatId: '-100333444',
+        originMessageId: null,
+        originTitle: 'Public Group',
+        originType: 'chat',
+      });
+
+      // Modern user origin
+      const userMsg = createBaseMessage({
+        forward_origin: {
+          type: 'user',
+          date: 1787300000,
+          sender_user: { id: 555, is_bot: false, first_name: 'Jasur', last_name: 'Karimov' },
+        },
+      });
+      expect(extractForwardOriginMetadata(userMsg)).toEqual({
+        originChatId: null,
+        originMessageId: null,
+        originTitle: 'Jasur Karimov',
+        originType: 'user',
+      });
+
+      // Modern hidden_user origin
+      const hiddenMsg = createBaseMessage({
+        forward_origin: {
+          type: 'hidden_user',
+          date: 1787300000,
+          sender_user_name: 'Secret Sender',
+        },
+      });
+      expect(extractForwardOriginMetadata(hiddenMsg)).toEqual({
+        originChatId: null,
+        originMessageId: null,
+        originTitle: 'Secret Sender',
+        originType: 'hidden_user',
+      });
+
+      // Legacy forward_from_chat
+      const legacyChatMsg = createBaseMessage({
+        forward_from_chat: { id: -100555666, type: 'channel', title: 'Legacy Channel' },
+        forward_from_message_id: 400,
+      });
+      expect(extractForwardOriginMetadata(legacyChatMsg)).toEqual({
+        originChatId: '-100555666',
+        originMessageId: '400',
+        originTitle: 'Legacy Channel',
+        originType: 'channel',
+      });
+
+      // Legacy forward_from
+      const legacyUserMsg = createBaseMessage({
+        forward_from: { id: 777, is_bot: false, first_name: 'Anvar' },
+        forward_from_message_id: 401,
+      });
+      expect(extractForwardOriginMetadata(legacyUserMsg)).toEqual({
+        originChatId: null,
+        originMessageId: '401',
+        originTitle: 'Anvar',
+        originType: 'user',
+      });
+
+      // Legacy forward_sender_name
+      const legacySenderMsg = createBaseMessage({
+        forward_sender_name: 'Legacy Anonymous',
+      });
+      expect(extractForwardOriginMetadata(legacySenderMsg)).toEqual({
+        originChatId: null,
+        originMessageId: null,
+        originTitle: 'Legacy Anonymous',
+        originType: 'hidden_user',
+      });
+
+      // Legacy with only forward_date / message_id
+      const legacyDateMsg = createBaseMessage({
+        forward_date: 1787200000,
+        forward_from_message_id: 402,
+      });
+      expect(extractForwardOriginMetadata(legacyDateMsg)).toEqual({
+        originChatId: null,
+        originMessageId: '402',
+        originTitle: null,
+        originType: null,
+      });
+
+      // Invalid / non-object message
+      expect(extractForwardOriginMetadata(null as unknown as TelegramMessage)).toBeNull();
     });
   });
 

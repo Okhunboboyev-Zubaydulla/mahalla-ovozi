@@ -120,12 +120,54 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
     return intakeId;
   }
 
+  async function createTestForwardIntake(
+    text: string,
+    messageId: string,
+    originChatId: string,
+    originMessageId: string,
+    originTitle: string = 'Hududgaz Jizzax',
+  ): Promise<string> {
+    const intakeId = `intk_${crypto.randomUUID()}`;
+    await db.insert(telegramIntakeRecords).values({
+      id: intakeId,
+      districtId: testDistrictId,
+      mahallaName: 'Guliston',
+      telegramBotId: 'bot_test_123',
+      telegramChatId: testChatId,
+      telegramMessageId: messageId,
+      originalTimestamp: new Date('2026-08-22T09:00:00.000Z'),
+      calendarDay: '2026-08-22',
+      processedAt: new Date('2026-08-22T09:00:00.000Z'),
+      rawPayload: {
+        update_id: Number(messageId),
+        message: {
+          message_id: Number(messageId),
+          date: 1787389200,
+          chat: { id: Number(testChatId), type: 'supergroup', title: 'Guliston Mahalla' },
+          text,
+          forward_origin: {
+            type: 'channel',
+            chat: {
+              id: Number(originChatId),
+              title: originTitle,
+              type: 'channel',
+            },
+            message_id: Number(originMessageId),
+            date: 1787389100,
+          },
+        },
+      },
+    });
+    return intakeId;
+  }
+
   async function processCandidateJob(
     intakeId: string,
     text: string,
     messageId: string = '1001',
     replyMetadata: any = null,
     telegramUserId?: string,
+    forwardMetadata?: any,
   ): Promise<void> {
     const jobData: TelegramSemanticRelevanceJobData = {
       intakeId,
@@ -139,6 +181,7 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
       contentType: 'TEXT',
       verbatimText: text,
       replyMetadata,
+      forwardMetadata,
     };
 
     await boss.send(TELEGRAM_SEMANTIC_RELEVANCE_QUEUE, jobData);
@@ -1723,6 +1766,179 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
       expect(op.finalStatus).toBe('COMPLETED_IRRELEVANT');
       expect((op.resultPayload as any).is_relevant).toBe(false);
       expect((op.resultPayload as any).exclusion_reason).toBe('GENERAL_CHATTER');
+      expect(aiController.mockAdapter.getCalls()).toHaveLength(0);
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Controlled Forwarded Message Admission (Forward-Origin Deduplication & Pre-Filter Alignment)
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('Controlled Forwarded Message Admission (Forward-Origin Deduplication & 3-Tier Pre-Filter)', () => {
+    it('Civic channel forward passes qualification and pre-filter, invoking AI evaluation', async () => {
+      aiController.mockAdapter.setNextResponse({
+        is_relevant: true,
+        relevant_lanes: ['GAS'],
+        exclusion_reason: null,
+        reasoning: 'Rejadan tashqari gaz uzilishi xabari',
+      });
+
+      const text = 'ДИҚҚАТ! ЖИЗЗАХДА 2 КУН ГАЗ БЎЛМАЙДИ!';
+      const messageId = '6001';
+      const originChatId = '-10099887711';
+      const originMessageId = '777';
+
+      const intakeId = await createTestForwardIntake(
+        text,
+        messageId,
+        originChatId,
+        originMessageId,
+        'Hududgaz Jizzax Rasmiy',
+      );
+
+      await processCandidateJob(
+        intakeId,
+        text,
+        messageId,
+        null,
+        undefined,
+        {
+          originChatId,
+          originMessageId,
+          originTitle: 'Hududgaz Jizzax Rasmiy',
+          originType: 'channel',
+        },
+      );
+
+      const op = await waitForOperation(intakeId);
+      expect(op).toBeDefined();
+      expect(op.finalStatus).toBe('COMPLETED_RELEVANT');
+      expect((op.resultPayload as any).is_relevant).toBe(true);
+      expect((op.resultPayload as any).relevant_lanes).toContain('GAS');
+
+      const calls = aiController.mockAdapter.getCalls();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.userPrompt).toContain('ДИҚҚАТ! ЖИЗЗАХДА 2 КУН ГАЗ БЎЛМАЙДИ!');
+    });
+
+    it('Second forward of SAME channel post within same chat/day is short-circuited as DUPLICATE_FORWARD_ORIGIN with 0 AI calls', async () => {
+      aiController.mockAdapter.setNextResponse({
+        is_relevant: true,
+        relevant_lanes: ['GAS'],
+        exclusion_reason: null,
+        reasoning: 'Rejadan tashqari gaz uzilishi xabari',
+      });
+
+      const text = 'ДИҚҚАТ! ЖИЗЗАХДА 2 КУН ГАЗ БЎЛМАЙДИ!';
+      const originChatId = '-10099887711';
+      const originMessageId = '777';
+
+      // 1. First forward arrives and processes through AI
+      const intakeId1 = await createTestForwardIntake(
+        text,
+        '6101',
+        originChatId,
+        originMessageId,
+      );
+      await processCandidateJob(
+        intakeId1,
+        text,
+        '6101',
+        null,
+        undefined,
+        {
+          originChatId,
+          originMessageId,
+          originTitle: 'Hududgaz Jizzax Rasmiy',
+          originType: 'channel',
+        },
+      );
+      const op1 = await waitForOperation(intakeId1);
+      expect(op1).toBeDefined();
+      expect(op1.finalStatus).toBe('COMPLETED_RELEVANT');
+      expect(aiController.mockAdapter.getCalls()).toHaveLength(1);
+
+      // Clear AI calls history to verify second forward does not call AI
+      aiController.mockAdapter.clearHistory();
+
+      // 2. Second forward of the SAME channel post arrives in the same chat and day
+      const intakeId2 = await createTestForwardIntake(
+        text,
+        '6102',
+        originChatId,
+        originMessageId,
+      );
+      await processCandidateJob(
+        intakeId2,
+        text,
+        '6102',
+        null,
+        undefined,
+        {
+          originChatId,
+          originMessageId,
+          originTitle: 'Hududgaz Jizzax Rasmiy',
+          originType: 'channel',
+        },
+      );
+
+      const op2 = await waitForOperation(intakeId2);
+      expect(op2).toBeDefined();
+      expect(op2.finalStatus).toBe('COMPLETED_IRRELEVANT');
+      expect((op2.resultPayload as any).is_relevant).toBe(false);
+      expect((op2.resultPayload as any).exclusion_reason).toBe('DUPLICATE_FORWARD_ORIGIN');
+      expect((op2.resultPayload as any).reasoning).toContain('Deterministic deduplication');
+
+      // Verify 0 AI tokens / calls consumed
+      expect(aiController.mockAdapter.getCalls()).toHaveLength(0);
+
+      // Verify DB record status updated to EXCLUDED
+      const [record2] = await db
+        .select({
+          status: telegramIntakeRecords.status,
+          rawPayload: telegramIntakeRecords.rawPayload,
+        })
+        .from(telegramIntakeRecords)
+        .where(eq(telegramIntakeRecords.id, intakeId2));
+      expect(record2?.status).toBe('EXCLUDED');
+      expect((record2?.rawPayload as any)?.exclusionReason).toBe('DUPLICATE_FORWARD_ORIGIN');
+    });
+
+    it('Forwarded advertisement without civic keywords is short-circuited by pre-filter with 0 AI calls', async () => {
+      const adText =
+        'Arzon va sifatli kiyim-kechaklar, butun Oʻzbekiston boʻylab yetkazib beramiz! Buyurtma bering: +998901234567';
+      const messageId = '6201';
+      const originChatId = '-10055443322';
+      const originMessageId = '999';
+
+      const intakeId = await createTestForwardIntake(
+        adText,
+        messageId,
+        originChatId,
+        originMessageId,
+        'Kiyimlar Savdosi',
+      );
+
+      await processCandidateJob(
+        intakeId,
+        adText,
+        messageId,
+        null,
+        undefined,
+        {
+          originChatId,
+          originMessageId,
+          originTitle: 'Kiyimlar Savdosi',
+          originType: 'channel',
+        },
+      );
+
+      const op = await waitForOperation(intakeId);
+      expect(op).toBeDefined();
+      expect(op.finalStatus).toBe('COMPLETED_IRRELEVANT');
+      expect((op.resultPayload as any).is_relevant).toBe(false);
+      expect((op.resultPayload as any).exclusion_reason).toBe('GENERAL_CHATTER');
+
+      // Verify 0 AI calls consumed!
       expect(aiController.mockAdapter.getCalls()).toHaveLength(0);
     });
   });

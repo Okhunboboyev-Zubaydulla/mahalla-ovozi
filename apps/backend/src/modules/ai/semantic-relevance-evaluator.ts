@@ -23,6 +23,7 @@ export const ExclusionReasonEnum = z.enum([
   'NEUTRAL_OR_PRAISE',
   'GENERAL_CHATTER',
   'UNRESOLVED_AMBIGUOUS_FRAGMENT',
+  'DUPLICATE_FORWARD_ORIGIN',
 ]);
 export type ExclusionReason = z.infer<typeof ExclusionReasonEnum>;
 

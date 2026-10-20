@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import type PgBoss from 'pg-boss';
-import { eq, and, inArray, sql, gt, lt, desc } from 'drizzle-orm';
+import { eq, and, inArray, sql, gt, lt, desc, isNotNull, ne } from 'drizzle-orm';
 import { findUniqueViolation, type DbClient } from '../../../adapters/db/client.js';
 import {
   districts,
@@ -15,6 +15,7 @@ import {
   JobSingletonKeys,
   type TelegramSemanticRelevanceJobData,
   type TelegramTopicAssignmentJobData,
+  type ForwardMetadata,
 } from '../../../adapters/jobs/boss-client.js';
 import { insertAiProviderAttempts } from '../ai-operation-repository.js';
 import {
@@ -31,10 +32,19 @@ import type {
 import {
   hasSelfContainedCivicSignal,
   matchesCivicLaneKeyword,
+  extractForwardOriginMetadata,
 } from '../../telegram-intake/telegram-content-qualification.js';
-import { extractVerbatimDisplayText } from '../../telegram-intake/telegram-payload-text.js';
+import {
+  extractVerbatimDisplayText,
+  resolveTelegramMessageObject,
+} from '../../telegram-intake/telegram-payload-text.js';
+import type { TelegramMessage } from '../../../adapters/telegram/telegram-types.js';
 import { clearPendingRetryFlag } from '../../issues/retry-service.js';
 import { DEBUG_PAYLOAD_RETENTION_MS } from '../../retention/debug-payload-retention.js';
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+}
 
 export interface SemanticRelevanceJobDeps {
   db: DbClient;
@@ -67,6 +77,7 @@ export async function processSemanticRelevanceJobs(
           contentType,
           verbatimText,
           replyMetadata,
+          forwardMetadata,
           userMetadata,
           burstMessages,
         } = job.data;
@@ -143,6 +154,223 @@ export async function processSemanticRelevanceJobs(
               }),
             );
             continue;
+          }
+
+          // Layer 1: Forward-Origin Deduplication Gate
+          let effectiveForwardMetadata: ForwardMetadata | null = forwardMetadata ?? null;
+
+          if (!effectiveForwardMetadata) {
+            try {
+              const [candidateRec] = await db
+                .select({
+                  id: telegramIntakeRecords.id,
+                  rawPayload: telegramIntakeRecords.rawPayload,
+                })
+                .from(telegramIntakeRecords)
+                .where(eq(telegramIntakeRecords.id, intakeId))
+                .limit(1);
+
+              if (candidateRec?.rawPayload) {
+                const rawRecord = asRecord(candidateRec.rawPayload);
+                const msgObj =
+                  resolveTelegramMessageObject(rawRecord) ??
+                  (rawRecord?.message_id ? rawRecord : null);
+                if (msgObj) {
+                  effectiveForwardMetadata = extractForwardOriginMetadata(
+                    msgObj as TelegramMessage,
+                  );
+                }
+              }
+            } catch (lookupErr) {
+              console.warn(
+                JSON.stringify({
+                  event: 'TELEGRAM_SEMANTIC_FORWARD_METADATA_LOOKUP_FAILED',
+                  intakeId,
+                  districtId,
+                  error: (lookupErr as Error).message,
+                }),
+              );
+            }
+          }
+
+          if (
+            effectiveForwardMetadata?.originChatId &&
+            effectiveForwardMetadata?.originMessageId
+          ) {
+            const targetOriginChatId = effectiveForwardMetadata.originChatId;
+            const targetOriginMessageId = effectiveForwardMetadata.originMessageId;
+
+            let isDuplicateForward = false;
+            try {
+              const previousRecords = await db
+                .select({
+                  id: telegramIntakeRecords.id,
+                  rawPayload: telegramIntakeRecords.rawPayload,
+                })
+                .from(telegramIntakeRecords)
+                .where(
+                  and(
+                    eq(telegramIntakeRecords.districtId, districtId),
+                    eq(telegramIntakeRecords.telegramChatId, telegramChatId),
+                    eq(telegramIntakeRecords.calendarDay, calendarDay),
+                    ne(telegramIntakeRecords.id, intakeId),
+                    isNotNull(telegramIntakeRecords.processedAt),
+                  ),
+                );
+
+              for (const prev of previousRecords) {
+                const prevRaw = asRecord(prev.rawPayload);
+                if (!prevRaw) continue;
+
+                // 1. Direct forwardMetadata if stamped
+                const prevMetaDirect = prevRaw.forwardMetadata as ForwardMetadata | undefined;
+                if (
+                  prevMetaDirect &&
+                  prevMetaDirect.originChatId === targetOriginChatId &&
+                  prevMetaDirect.originMessageId === targetOriginMessageId
+                ) {
+                  isDuplicateForward = true;
+                  break;
+                }
+
+                // 2. Direct forwardOrigin object if stamped in exclusionMeta
+                const prevForwardOrigin = prevRaw.forwardOrigin as
+                  | { chatId?: string; messageId?: string }
+                  | undefined;
+                if (
+                  prevForwardOrigin &&
+                  String(prevForwardOrigin.chatId) === targetOriginChatId &&
+                  String(prevForwardOrigin.messageId) === targetOriginMessageId
+                ) {
+                  isDuplicateForward = true;
+                  break;
+                }
+
+                // 3. Extract from raw Telegram message envelope
+                const prevMsg =
+                  resolveTelegramMessageObject(prevRaw) ??
+                  (prevRaw.message_id ? prevRaw : null);
+                if (prevMsg) {
+                  const prevMeta = extractForwardOriginMetadata(prevMsg as TelegramMessage);
+                  if (
+                    prevMeta &&
+                    prevMeta.originChatId === targetOriginChatId &&
+                    prevMeta.originMessageId === targetOriginMessageId
+                  ) {
+                    isDuplicateForward = true;
+                    break;
+                  }
+                }
+              }
+            } catch (dedupErr) {
+              console.warn(
+                JSON.stringify({
+                  event: 'TELEGRAM_SEMANTIC_FORWARD_DEDUP_QUERY_FAILED',
+                  intakeId,
+                  districtId,
+                  telegramChatId,
+                  error: (dedupErr as Error).message,
+                }),
+              );
+            }
+
+            if (isDuplicateForward) {
+              const [activeProfile] = await db
+                .select({ id: aiProfiles.id })
+                .from(aiProfiles)
+                .where(
+                  and(
+                    eq(aiProfiles.operationType, 'SEMANTIC_RELEVANCE'),
+                    eq(aiProfiles.isActive, true),
+                  ),
+                )
+                .orderBy(desc(aiProfiles.version))
+                .limit(1);
+
+              const fallbackProfileId = activeProfile?.id ?? 'prof_rel_default';
+              const finalExclusionReason: ExclusionReason = 'DUPLICATE_FORWARD_ORIGIN';
+              const fastFailReasoning = `Deterministic deduplication: Channel post (${targetOriginChatId}:${targetOriginMessageId}) already processed in this chat today`;
+
+              const allBurstIntakes =
+                burstMessages && burstMessages.length > 0
+                  ? burstMessages
+                  : [{ intakeId, telegramMessageId }];
+
+              const aiOperationId = `aiop_${crypto.randomUUID()}`;
+
+              await withTransactionalIntake(pool, boss, async ({ tx }) => {
+                for (const item of allBurstIntakes) {
+                  const opId =
+                    item.intakeId === intakeId ? aiOperationId : `aiop_${crypto.randomUUID()}`;
+                  await tx
+                    .insert(aiOperations)
+                    .values({
+                      id: opId,
+                      districtId,
+                      mahallaName,
+                      calendarDay,
+                      operationType: 'SEMANTIC_RELEVANCE',
+                      targetId: item.intakeId,
+                      pinnedProfileId: fallbackProfileId,
+                      contextRevision: 0,
+                      snapshotFingerprint: 'fast_fail_duplicate_forward',
+                      finalStatus: 'COMPLETED_IRRELEVANT',
+                      resultPayload: {
+                        is_relevant: false,
+                        relevant_lanes: [],
+                        exclusion_reason: finalExclusionReason,
+                        accepted_message_ids: [],
+                        reasoning: fastFailReasoning,
+                      },
+                    })
+                    .onConflictDoNothing();
+                }
+
+                const allIntakeIds = allBurstIntakes.map((m) => m.intakeId);
+                const expiresAt = new Date(Date.now() + DEBUG_PAYLOAD_RETENTION_MS).toISOString();
+                const exclusionMeta = JSON.stringify({
+                  status: 'EXCLUDED',
+                  exclusionReason: finalExclusionReason,
+                  forwardOrigin: {
+                    chatId: targetOriginChatId,
+                    messageId: targetOriginMessageId,
+                  },
+                  verbatimText,
+                  reasoning: fastFailReasoning,
+                  expiresAt,
+                  purgedAt: null,
+                });
+
+                await tx
+                  .update(telegramIntakeRecords)
+                  .set({
+                    status: 'EXCLUDED',
+                    rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
+                    processedAt: new Date(),
+                    updatedAt: new Date(),
+                  })
+                  .where(inArray(telegramIntakeRecords.id, allIntakeIds));
+
+                verbatimText = '';
+              });
+
+              const durationMs = Math.round(performance.now() - startTime);
+              console.log(
+                JSON.stringify({
+                  event: 'TELEGRAM_SEMANTIC_EXCLUDED_DUPLICATE_FORWARD',
+                  districtId,
+                  mahallaName,
+                  calendarDay,
+                  telegramChatId,
+                  telegramMessageId,
+                  aiOperationId,
+                  originChatId: targetOriginChatId,
+                  originMessageId: targetOriginMessageId,
+                  durationMs,
+                }),
+              );
+              continue;
+            }
           }
 
           // Layer 1: Deterministic Parent-Reply Fast-Fail Gate
@@ -312,6 +540,7 @@ export async function processSemanticRelevanceJobs(
                 .update(telegramIntakeRecords)
                 .set({
                   rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
+                  processedAt: new Date(),
                   updatedAt: new Date(),
                 })
                 .where(inArray(telegramIntakeRecords.id, allIntakeIds));
@@ -593,6 +822,7 @@ export async function processSemanticRelevanceJobs(
                 .update(telegramIntakeRecords)
                 .set({
                   rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
+                  processedAt: new Date(),
                   updatedAt: new Date(),
                 })
                 .where(inArray(telegramIntakeRecords.id, allIntakeIds));
@@ -850,6 +1080,15 @@ export async function processSemanticRelevanceJobs(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any -- tx from withTransactionalIntake is structurally DbOrTx; module-identity mismatch in TS
             await insertAiProviderAttempts(tx as any, aiOperationId, aiResult);
 
+            const allIntakeIds = allBurstIntakes.map((m) => m.intakeId);
+            await tx
+              .update(telegramIntakeRecords)
+              .set({
+                processedAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(inArray(telegramIntakeRecords.id, allIntakeIds));
+
             const filteredBurstMessages = burstMessages
               ? burstMessages.filter((m) => acceptedIds.has(m.telegramMessageId))
               : undefined;
@@ -873,6 +1112,7 @@ export async function processSemanticRelevanceJobs(
                 .update(telegramIntakeRecords)
                 .set({
                   rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
+                  processedAt: new Date(),
                   updatedAt: new Date(),
                 })
                 .where(inArray(telegramIntakeRecords.id, excludedIntakeIds));
@@ -954,6 +1194,7 @@ export async function processSemanticRelevanceJobs(
                 .update(telegramIntakeRecords)
                 .set({
                   rawPayload: sql`COALESCE(${telegramIntakeRecords.rawPayload}, '{}'::jsonb) || ${exclusionMeta}::jsonb`,
+                  processedAt: new Date(),
                   updatedAt: new Date(),
                 })
                 .where(inArray(telegramIntakeRecords.id, allIntakeIds));

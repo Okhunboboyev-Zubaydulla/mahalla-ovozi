@@ -127,6 +127,15 @@ export interface TelegramContentQualificationJobData {
   issueId?: string;
 }
 
+export type ForwardOriginType = 'channel' | 'user' | 'chat' | 'hidden_user';
+
+export interface ForwardMetadata {
+  originChatId: string | null;
+  originMessageId: string | null;
+  originTitle: string | null;
+  originType: ForwardOriginType | null;
+}
+
 /** Telegram semantic-relevance AI evaluation job. */
 export interface TelegramSemanticRelevanceJobData {
   intakeId: string;
@@ -140,6 +149,7 @@ export interface TelegramSemanticRelevanceJobData {
   contentType: 'TEXT' | 'MEDIA_CAPTION';
   verbatimText: string;
   replyMetadata: TelegramReplyMetadata | null;
+  forwardMetadata?: ForwardMetadata | null;
   userMetadata?: SenderProfileMetadata | null;
   burstMessages?: BurstMessageItem[];
   issueId?: string;
