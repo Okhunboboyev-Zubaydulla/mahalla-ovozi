@@ -5,6 +5,7 @@ import {
   TOPIC_PROJECTION_SYSTEM_PROMPT,
   isUzbekCyrillic,
   sanitizeUngroundedHokimSummary,
+  isCatastrophicMultiUtilityAccident,
   type TopicProjectionResult,
 } from '../src/modules/topics/topic-projection-evaluator.js';
 import type { AiGatewayPort } from '../src/modules/ai/ai-gateway.js';
@@ -30,6 +31,24 @@ describe('Story 2.5: Topic Projection Contracts & Evaluator Unit Tests', () => {
     it('returns false for predominantly Latin text with isolated rogue Cyrillic character', () => {
       expect(isUzbekCyrillic('Water outage in district 4 (А)')).toBe(false);
       expect(isUzbekCyrillic('Power failure occurred in mahalla а')).toBe(false);
+    });
+  });
+
+  describe('isCatastrophicMultiUtilityAccident Validator', () => {
+    it('returns true for catastrophic physical accidents (explosion, excavator severing lines)', () => {
+      expect(isCatastrophicMultiUtilityAccident('Portlash sababli gaz va elektr uzildi')).toBe(true);
+      expect(isCatastrophicMultiUtilityAccident('Портлаш юз берди, катта ҳалокат')).toBe(true);
+      expect(isCatastrophicMultiUtilityAccident('Экскаватор ер қазиш вақтида сим ва қувурларни узиб юборди')).toBe(true);
+      expect(isCatastrophicMultiUtilityAccident('Kavlash ishlari vaqtida quvurlar yorib yuborildi')).toBe(true);
+      expect(isCatastrophicMultiUtilityAccident('Трансформаторда кучли портлаш бўлди')).toBe(true);
+    });
+
+    it('returns false for routine civic complaints, inquiries, and legal explainers', () => {
+      expect(isCatastrophicMultiUtilityAccident('Gaz qachon keladi, svet nega yoq?')).toBe(false);
+      expect(isCatastrophicMultiUtilityAccident('Сув, газ ва свет таъминотида узилишлар бўляпти')).toBe(false);
+      expect(isCatastrophicMultiUtilityAccident('Газ қачон келади, сув қачон келади... деб кимга савол берса бўлади? ПФ-116')).toBe(false);
+      expect(isCatastrophicMultiUtilityAccident('Oddiy avariya sababli suv toxtadi')).toBe(false);
+      expect(isCatastrophicMultiUtilityAccident('')).toBe(false);
     });
   });
 
@@ -1685,6 +1704,89 @@ describe('Story 2.5: Topic Projection Contracts & Evaluator Unit Tests', () => {
         expect(result.lanes).toEqual(['GAS', 'HOKIM_RELATED']);
         expect(result.isHokimRelated).toBe(true);
         expect(result.summary).toBe('Газ таъминоти бўйича ҳокимликка эътироз билдирилгани хабар қилинмоқда.');
+      });
+
+      it('clamps lanes to primaryLane when single-evidence topic attempts to derive 3 utility lanes without catastrophic accident', async () => {
+        const snapshot: MahallaDailySnapshot = {
+          districtId: 'dist_tashkent_chilanzar',
+          mahallaName: 'Ғозғонтепа МФЙ',
+          calendarDay: '2026-10-15',
+          contextRevision: 1,
+          snapshotFingerprint: 'fp_decree_multi_lane',
+          evidence: [
+            {
+              id: 'evi_decree_1',
+              topicId: 'top_decree_gas',
+              lane: 'GAS',
+              verbatimText: 'Газ қачон келади, сув қачон келади... деб маҳалладан кимга савол берса бўлади? ПФ-116',
+              originalTimestamp: '2026-10-15T12:00:00.000Z',
+              telegramMessageId: '702',
+            },
+          ],
+        };
+
+        const mockGateway = createMockAiGateway({
+          summary: 'Сув, газ ва электр таъминотида узилишлар хабар қилинмоқда.',
+          lanes: ['GAS', 'WATER', 'ELECTRICITY'],
+          anchor_evidence_id: 'evi_decree_1',
+          anchor_quote: 'Газ қачон келади, сув қачон келади',
+          latest_meaningful_activity_timestamp: '2026-10-15T12:00:00.000Z',
+          attribution: 'Маҳалла фуқароси',
+          is_hokim_related: false,
+        });
+
+        const evaluator = new TopicProjectionEvaluator(mockGateway);
+        const result = await evaluator.evaluateTopicProjection({
+          topicId: 'top_decree_gas',
+          primaryLane: 'GAS',
+          generation: 1,
+          snapshot,
+        });
+
+        // Must clamp away WATER and ELECTRICITY to prevent 3-lane compounding from single rhetorical message
+        expect(result.lanes).toEqual(['GAS']);
+        expect(result.isHokimRelated).toBe(false);
+      });
+
+      it('permits 3 utility lanes for single-evidence topic if it describes a catastrophic physical accident', async () => {
+        const snapshot: MahallaDailySnapshot = {
+          districtId: 'dist_tashkent_chilanzar',
+          mahallaName: 'Guliston',
+          calendarDay: '2026-10-15',
+          contextRevision: 1,
+          snapshotFingerprint: 'fp_catastrophe_multi_lane',
+          evidence: [
+            {
+              id: 'evi_catastrophe_1',
+              topicId: 'top_catastrophe',
+              lane: 'GAS',
+              verbatimText: 'Катта портлаш юз берди! Газ қувури ва электр симлари узилиб, сув босиб кетди',
+              originalTimestamp: '2026-10-15T12:00:00.000Z',
+              telegramMessageId: '703',
+            },
+          ],
+        };
+
+        const mockGateway = createMockAiGateway({
+          summary: 'Ҳалокат сабабли газ, электр ва сув таъминотида узилишлар хабар қилинмоқда.',
+          lanes: ['GAS', 'ELECTRICITY', 'WATER'],
+          anchor_evidence_id: 'evi_catastrophe_1',
+          anchor_quote: 'Катта портлаш юз берди',
+          latest_meaningful_activity_timestamp: '2026-10-15T12:00:00.000Z',
+          attribution: 'Маҳалла фуқароси',
+          is_hokim_related: false,
+        });
+
+        const evaluator = new TopicProjectionEvaluator(mockGateway);
+        const result = await evaluator.evaluateTopicProjection({
+          topicId: 'top_catastrophe',
+          primaryLane: 'GAS',
+          generation: 1,
+          snapshot,
+        });
+
+        // Permitted because verbatimText matches catastrophic accident (портлаш, узилиб)
+        expect(result.lanes).toEqual(['GAS', 'ELECTRICITY', 'WATER']);
       });
     });
   });

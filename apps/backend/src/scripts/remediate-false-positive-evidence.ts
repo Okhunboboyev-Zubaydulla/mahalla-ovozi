@@ -58,7 +58,7 @@ export interface RemediationOptions {
 
 export interface FalsePositiveRule {
   targetLabel: string;
-  lane: 'ELECTRICITY' | 'GAS';
+  lane: QualifyingLane | 'ANY';
   mahallaKeywords: string[];
   messagePatterns: RegExp[];
   exclusionReason: string;
@@ -93,6 +93,18 @@ export const FALSE_POSITIVE_RULES: FalsePositiveRule[] = [
     ],
     exclusionReason: 'GENERAL_CHATTER',
     reasoning: 'Ушбу хабар аукцион ва прокурор назоратига оид муҳокама бўлиб, газ тармоғидаги техник муаммога алоқадор эмас.',
+  },
+  {
+    targetLabel: 'Legal Decree Explainer (Ғозғонтепа МФЙ) - PF-116 Informational News',
+    lane: 'ANY',
+    mahallaKeywords: ['ғозғонтепа', 'гозгонтепа', 'gozg\'ontepa', 'gozgontepa', 'ғозғон тепа', 'гозгон тепа'],
+    messagePatterns: [
+      /пф\s*[-–—]\s*116/iu,
+      /pf\s*[-–—]\s*116/iu,
+      /маҳалладан\s+кимга\s+савол\s+берса\s+бўлади/iu,
+    ],
+    exclusionReason: 'GENERAL_CHATTER',
+    reasoning: 'Ушбу хабар ПФ-116 фармони бўйича ҳуқуқий тушунтириш ва ахборот бўлиб, коммунал авария ёки узилиш хабари эмас.',
   },
 ];
 
@@ -129,7 +141,7 @@ export interface TopicRemediationReport {
     latestUpdate: string | null;
     summary: string;
   } | null;
-  reprojectionMode: 'AI_REPROJECTED' | 'DETERMINISTIC_UPDATED' | 'QUEUED_BOSS' | 'SKIPPED';
+  reprojectionMode: 'AI_REPROJECTED' | 'DETERMINISTIC_UPDATED' | 'QUEUED_BOSS' | 'SKIPPED' | 'TOPIC_DELETED';
 }
 
 export interface RemediationResult {
@@ -197,7 +209,7 @@ export function matchFalsePositiveRule(
   const normMahalla = mahallaName.toLowerCase();
   for (const rule of FALSE_POSITIVE_RULES) {
     const mahallaMatches = rule.mahallaKeywords.some((kw) => normMahalla.includes(kw));
-    const laneMatches = rule.lane === primaryLane;
+    const laneMatches = rule.lane === 'ANY' || rule.lane === primaryLane;
 
     // Must match either the mahalla or lane + pattern
     if (mahallaMatches || laneMatches) {
@@ -241,7 +253,9 @@ export function detectSurvivingLane(
   const normMahalla = mahallaName.toLowerCase();
   for (const rule of FALSE_POSITIVE_RULES) {
     if (rule.mahallaKeywords.some((kw) => normMahalla.includes(kw))) {
-      return rule.lane;
+      if (rule.lane !== 'ANY') {
+        return rule.lane;
+      }
     }
   }
 
@@ -424,6 +438,12 @@ export async function remediateFalsePositiveEvidence(
         console.log(`   🔍 [DRY-RUN] Would delete ${matchedEvidence.length} evidence records.`);
         console.log(`   🔍 [DRY-RUN] Would set ${matchedEvidence.length} intake records to EXCLUDED / GENERAL_CHATTER.`);
       }
+      if (genuineEvidence.length === 0) {
+        console.log(`   🔍 [DRY-RUN] No genuine evidence remaining. Would delete orphaned topic ${topicId}.`);
+        report.reprojectionMode = 'TOPIC_DELETED';
+        reports.push(report);
+        continue;
+      }
       if (primaryLane !== targetLane) {
         console.log(`   🔍 [DRY-RUN] Would update topic primary_lane: "${primaryLane}" -> "${targetLane}".`);
       }
@@ -441,6 +461,42 @@ export async function remediateFalsePositiveEvidence(
 
     // Transactional evidence cleanup & intake exclusion
     const executeCleanup = async (client: pg.PoolClient) => {
+      if (genuineEvidence.length === 0) {
+        // Cleanly delete orphaned topic, its projection and evidence
+        if (firstRow.projectionId) {
+          await client.query(`DELETE FROM topic_projections WHERE topic_id = $1`, [topicId]);
+        }
+
+        if (evIdsToDelete.length > 0) {
+          await client.query(
+            `DELETE FROM accepted_evidence WHERE id = ANY($1::text[])`,
+            [evIdsToDelete],
+          );
+        }
+
+        if (intakeIdsToExclude.length > 0) {
+          const exclusionPayload = JSON.stringify({
+            status: 'EXCLUDED',
+            exclusionReason: 'GENERAL_CHATTER',
+            remediatedAt: new Date().toISOString(),
+            remediationReason: 'Remediated false-positive civic evidence via data remediation script',
+          });
+
+          await client.query(
+            `UPDATE telegram_intake_records
+             SET status = 'EXCLUDED',
+                 raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $1::jsonb,
+                 updated_at = NOW()
+             WHERE id = ANY($2::text[])`,
+            [exclusionPayload, intakeIdsToExclude],
+          );
+        }
+
+        await client.query(`DELETE FROM topics WHERE id = $1`, [topicId]);
+        return;
+      }
+
+      // Surviving topic branch:
       // 1. Referential integrity: if current projection anchor is being deleted or topic lane changed, re-anchor to remaining genuine evidence
       if (
         safeAnchorId &&
@@ -455,9 +511,6 @@ export async function remediateFalsePositiveEvidence(
            WHERE topic_id = $2`,
           [safeAnchorId, topicId],
         );
-      } else if (!safeAnchorId && firstRow.projectionId) {
-        // If no evidence remains (rare/abnormal), delete projection
-        await client.query(`DELETE FROM topic_projections WHERE topic_id = $1`, [topicId]);
       }
 
       // 2. Delete false-positive evidence rows (if any)
@@ -488,23 +541,21 @@ export async function remediateFalsePositiveEvidence(
       }
 
       // 4. Update topic's primary_lane, latestRelevantEvidenceTimestamp & bump required generation
-      if (genuineEvidence.length > 0) {
-        const { rows: maxRows } = await client.query<{ maxTs: Date }>(
-          `SELECT MAX(original_timestamp) as "maxTs" FROM accepted_evidence WHERE topic_id = $1`,
-          [topicId],
-        );
-        const maxTs = maxRows[0]?.maxTs ?? new Date();
+      const { rows: maxRows } = await client.query<{ maxTs: Date }>(
+        `SELECT MAX(original_timestamp) as "maxTs" FROM accepted_evidence WHERE topic_id = $1`,
+        [topicId],
+      );
+      const maxTs = maxRows[0]?.maxTs ?? new Date();
 
-        await client.query(
-          `UPDATE topics 
-           SET primary_lane = $1,
-               latest_relevant_evidence_timestamp = $2,
-               required_derived_generation = $3,
-               updated_at = NOW()
-           WHERE id = $4`,
-          [targetLane, maxTs, nextGeneration, topicId],
-        );
-      }
+      await client.query(
+        `UPDATE topics 
+         SET primary_lane = $1,
+             latest_relevant_evidence_timestamp = $2,
+             required_derived_generation = $3,
+             updated_at = NOW()
+         WHERE id = $4`,
+        [targetLane, maxTs, nextGeneration, topicId],
+      );
     };
 
     const client = await pool.connect();
@@ -512,6 +563,15 @@ export async function remediateFalsePositiveEvidence(
       await client.query('BEGIN');
       await executeCleanup(client);
       await client.query('COMMIT');
+      if (genuineEvidence.length === 0) {
+        console.log(`   ✅ Cleanly deleted orphaned topic ${topicId} (no genuine evidence remaining).`);
+        console.log(`   ✅ Removed ${evIdsToDelete.length} false-positive evidence records from DB.`);
+        console.log(`   ✅ Marked ${intakeIdsToExclude.length} intake records as EXCLUDED (GENERAL_CHATTER).`);
+        report.afterProjection = null;
+        report.reprojectionMode = 'TOPIC_DELETED';
+        reports.push(report);
+        continue;
+      }
       if (evIdsToDelete.length > 0) {
         console.log(`   ✅ Removed ${evIdsToDelete.length} false-positive evidence records from DB.`);
         console.log(`   ✅ Marked ${intakeIdsToExclude.length} intake records as EXCLUDED (GENERAL_CHATTER).`);

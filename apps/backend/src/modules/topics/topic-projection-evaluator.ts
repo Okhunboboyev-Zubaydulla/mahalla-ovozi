@@ -101,6 +101,17 @@ export function sanitizeUngroundedHokimSummary(summary: string): string {
   return sanitized;
 }
 
+/**
+ * Detects whether a text explicitly describes a physical catastrophic multi-utility accident
+ * (e.g., explosion, heavy excavator / excavation severing utility lines).
+ */
+export function isCatastrophicMultiUtilityAccident(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  const catastrophicRegex =
+    /(?:портлаш|портлади|портлаган|взрыв|экскаватор|қазиш|кавлаш|узиб\s+(?:юбор|ташла)|узилган|тешиб|ёриб|ҳалокат|portlash|portladi|portlagan|vzryv|ekskavator|qazish|kavlash|uzib\s+(?:yubor|tashla)|uzilgan|teshib|yorib|halokat)/iu;
+  return catastrophicRegex.test(text);
+}
+
 export const TopicProjectionResultSchema = z.preprocess(
   (val: any) => {
     if (!val || typeof val !== 'object') return val;
@@ -297,6 +308,8 @@ PART I: CORE PROJECTION PRINCIPLES & GUARDRAILS
 ### 3. MULTI-LANE DERIVATION
 - Identify all applicable municipal/governance lanes from: WATER, ELECTRICITY, GAS, WASTE, HOKIM_RELATED.
 - The target Topic's initial primaryLane is IMMUTABLE and MUST be included in the lanes array.
+- SINGLE-MESSAGE MULTI-LANE RESTRICTION:
+  - When the target Topic contains only 1 evidence item, NEVER derive 3 or more independent utility lanes (WATER, GAS, ELECTRICITY) simultaneously from rhetorical utility lists or general inquiries, UNLESS that single message explicitly describes a physical catastrophic multi-utility accident (e.g. explosion or excavation severing multiple utility lines). In all other single-message cases, limit lanes strictly to the primary verified disruption.
 - HOKIM_RELATED QUALIFICATION CRITERIA:
   - Include HOKIM_RELATED if and only if at least one evidence item in the topic explicitly contains designated Hokim/Hokimiyat terms (including root terms "hokim", "hokimiyat", "hokimlik"; slang/typos/dialect "xokim", "hakim", "xakim", "hokimyat", "xokimyat", "hokimat", "xokimat", "hokim buva", "hokimbobo", "hokimimiz"; or apparatus officials "zamhokim", "hokim yordamchisi") OR is a direct contextual reply/burst continuation of such an appeal.
   - Road defects, mud, or unpaved street issues without explicit Hokim/Hokimiyat mentions must NEVER derive HOKIM_RELATED.
@@ -637,6 +650,20 @@ ${otherSections.join('\n\n')}`);
           if (hasHokimInSummary) {
             data.summary = sanitizeUngroundedHokimSummary(data.summary);
           }
+        }
+      }
+    }
+
+    // Guardrail 3b: Single-message multi-utility compounding prevention
+    if (targetEvidence.length === 1) {
+      const utilityLanes: QualifyingLane[] = ['WATER', 'GAS', 'ELECTRICITY'];
+      const derivedUtilityCount = data.lanes.filter((l) => utilityLanes.includes(l)).length;
+      if (derivedUtilityCount >= 3) {
+        const singleText = targetEvidence[0]?.verbatimText ?? '';
+        const isCatastrophicAccident = isCatastrophicMultiUtilityAccident(singleText);
+        if (!isCatastrophicAccident) {
+          data.lanes = [input.primaryLane];
+          data.is_hokim_related = input.primaryLane === 'HOKIM_RELATED';
         }
       }
     }

@@ -3268,6 +3268,141 @@ describe('Semantic Relevance Domain Evaluator & Contracts Unit Tests', () => {
           expect(result.data.relevant_lanes).toHaveLength(0);
         });
 
+        it('evaluates direct citizen inquiry ("Gaz qachon keladi?") as RELEVANT with inherent complaint tone', async () => {
+          mockAdapter.setNextResponse({
+            is_relevant: true,
+            relevant_lanes: ['GAS'],
+            exclusion_reason: null,
+            accepted_message_ids: ['508'],
+            reasoning: 'Direct citizen inquiry expressing active supply outage with inherent grievance tone.',
+          });
+
+          const snapshot: MahallaDailySnapshot = {
+            districtId: 'dist_act_123',
+            mahallaName: 'Navbahor',
+            calendarDay: '2026-09-15',
+            contextRevision: 0,
+            snapshotFingerprint: 'fp_citizen_inquiry_gas',
+            evidence: [],
+          };
+
+          const result = await evaluator.evaluateRelevance({
+            candidateText: 'Gaz qachon keladi?',
+            telegramMessageId: '508',
+            originalTimestamp: '2026-09-15T14:50:00.000Z',
+            contentType: 'TEXT',
+            replyMetadata: null,
+            snapshot,
+            profileId: 'prof_rel_2026_08_v1',
+          });
+
+          expect(result.data.is_relevant).toBe(true);
+          expect(result.data.exclusion_reason).toBeNull();
+          expect(result.data.relevant_lanes).toEqual(['GAS']);
+          expect(result.data.accepted_message_ids).toEqual(['508']);
+        });
+
+        it('evaluates genuine outage announcement with channel link ("E\'lon: bugun ta\'mirlash sababli gaz o\'chiriladi") as RELEVANT', async () => {
+          mockAdapter.setNextResponse({
+            is_relevant: true,
+            relevant_lanes: ['GAS'],
+            exclusion_reason: null,
+            accepted_message_ids: ['509'],
+            reasoning: 'Concrete municipal disruption announcement with real disruption payload despite channel footer.',
+          });
+
+          const snapshot: MahallaDailySnapshot = {
+            districtId: 'dist_act_123',
+            mahallaName: 'Navbahor',
+            calendarDay: '2026-09-15',
+            contextRevision: 0,
+            snapshotFingerprint: 'fp_announcement_gas',
+            evidence: [],
+          };
+
+          const result = await evaluator.evaluateRelevance({
+            candidateText: "E'lon: bugun ta'mirlash sababli soat 10:00 dan 18:00 gacha gaz o'chiriladi. Obuna bo'lish uchun havola: t.me/gaz_xabarlar",
+            telegramMessageId: '509',
+            originalTimestamp: '2026-09-15T14:55:00.000Z',
+            contentType: 'TEXT',
+            replyMetadata: null,
+            snapshot,
+            profileId: 'prof_rel_2026_08_v1',
+          });
+
+          expect(result.data.is_relevant).toBe(true);
+          expect(result.data.exclusion_reason).toBeNull();
+          expect(result.data.relevant_lanes).toEqual(['GAS']);
+          expect(result.data.accepted_message_ids).toEqual(['509']);
+        });
+
+        it('evaluates genuine waste announcement ("Diqqat: musor mashinasi bugun kelmaydi") as RELEVANT (WASTE)', async () => {
+          mockAdapter.setNextResponse({
+            is_relevant: true,
+            relevant_lanes: ['WASTE'],
+            exclusion_reason: null,
+            accepted_message_ids: ['510'],
+            reasoning: 'Genuine municipal waste service cancellation announcement.',
+          });
+
+          const snapshot: MahallaDailySnapshot = {
+            districtId: 'dist_act_123',
+            mahallaName: 'Navbahor',
+            calendarDay: '2026-09-15',
+            contextRevision: 0,
+            snapshotFingerprint: 'fp_announcement_waste',
+            evidence: [],
+          };
+
+          const result = await evaluator.evaluateRelevance({
+            candidateText: 'Диққат: мусор машинаси бугун келмайди, эртага олиб кетилади',
+            telegramMessageId: '510',
+            originalTimestamp: '2026-09-15T15:00:00.000Z',
+            contentType: 'TEXT',
+            replyMetadata: null,
+            snapshot,
+            profileId: 'prof_rel_2026_08_v1',
+          });
+
+          expect(result.data.is_relevant).toBe(true);
+          expect(result.data.exclusion_reason).toBeNull();
+          expect(result.data.relevant_lanes).toEqual(['WASTE']);
+          expect(result.data.accepted_message_ids).toEqual(['510']);
+        });
+
+        it('evaluates legal decree explainer ("Газ қачон келади, сув қачон келади... ПФ-116") as EXCLUDED', async () => {
+          mockAdapter.setNextResponse({
+            is_relevant: false,
+            relevant_lanes: [],
+            exclusion_reason: 'GENERAL_CHATTER',
+            accepted_message_ids: [],
+            reasoning: 'Legal decree explainer and regulatory news summarizing PF-116 without reporting an active disruption.',
+          });
+
+          const snapshot: MahallaDailySnapshot = {
+            districtId: 'dist_act_123',
+            mahallaName: 'Ғозғонтепа МФЙ',
+            calendarDay: '2026-09-15',
+            contextRevision: 0,
+            snapshotFingerprint: 'fp_decree_explainer',
+            evidence: [],
+          };
+
+          const result = await evaluator.evaluateRelevance({
+            candidateText: 'Газ қачон келади, сув қачон келади... деб маҳалладан кимга савол берса бўлади? Энди маҳалла раиси аҳолининг коммунал хизматлар... муаммоларини ҳал қилади. ПФ-116. Обуна бўлиш: телеграм',
+            telegramMessageId: '511',
+            originalTimestamp: '2026-09-15T15:05:00.000Z',
+            contentType: 'TEXT',
+            replyMetadata: null,
+            snapshot,
+            profileId: 'prof_rel_2026_08_v1',
+          });
+
+          expect(result.data.is_relevant).toBe(false);
+          expect(result.data.exclusion_reason).toBe('GENERAL_CHATTER');
+          expect(result.data.relevant_lanes).toHaveLength(0);
+        });
+
         it('verifies prompt hardening invariants in SEMANTIC_RELEVANCE_SYSTEM_PROMPT', () => {
           // Section 16.1 Substantive Meaning Gate
           expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('SUBSTANTIVE MEANING GATE');
@@ -3290,6 +3425,19 @@ describe('Semantic Relevance Domain Evaluator & Contracts Unit Tests', () => {
           // Section 12 Informal Street Vendors & Transit Landmarks
           expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('INFORMAL STREET VENDOR & TRANSIT LANDMARKS');
           expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('nos sotayotganlar');
+
+          // Citizen Inquiries with Inherent Complaint Tone
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('Direct Citizen Inquiries with Inherent Complaint Tone');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('shikoyat ohangi');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('Gaz qachon keladi?');
+
+          // Genuine Municipal Disruption Announcements
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('GENUINE MUNICIPAL DISRUPTION ANNOUNCEMENTS');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain("Obuna bo'lish uchun havola");
+
+          // Institutional & Legal Decree Explainers / General News
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('INSTITUTIONAL & LEGAL DECREE EXPLAINERS / GENERAL NEWS');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('ПФ-116');
         });
       });
     });

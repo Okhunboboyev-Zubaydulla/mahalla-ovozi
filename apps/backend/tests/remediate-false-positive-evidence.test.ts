@@ -276,6 +276,31 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
     expect(match4).not.toBeNull();
     expect(match4?.exclusionReason).toBe('GENERAL_CHATTER');
 
+    // Ғозғонтепа МФЙ rule matches (PF-116 legal explainer)
+    const match5 = matchFalsePositiveRule(
+      'Энди маҳалла раиси аҳолининг муаммоларини ҳал қилади. ПФ - 116',
+      'Ғозғонтепа МФЙ',
+      'GAS',
+    );
+    expect(match5).not.toBeNull();
+    expect(match5?.exclusionReason).toBe('GENERAL_CHATTER');
+
+    const match6 = matchFalsePositiveRule(
+      'ПФ-116 қарори бўйича тушунтириш',
+      'Ғозғонтепа МФЙ',
+      'ELECTRICITY',
+    );
+    expect(match6).not.toBeNull();
+    expect(match6?.exclusionReason).toBe('GENERAL_CHATTER');
+
+    const match7 = matchFalsePositiveRule(
+      'Газ қачон келади, сув қачон келади... деб маҳалладан кимга савол берса бўлади? ПФ-116',
+      'Ғозғонтепа МФЙ',
+      'WATER',
+    );
+    expect(match7).not.toBeNull();
+    expect(match7?.exclusionReason).toBe('GENERAL_CHATTER');
+
     // Genuine civic disruption messages must NOT match
     const genuineElec = matchFalsePositiveRule(
       'Трансформатор ёниб кетди, свет йўқ',
@@ -528,5 +553,119 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
     await db.delete(acceptedEvidence).where(eq(acceptedEvidence.topicId, standaloneGasTopicId));
     await db.delete(topics).where(eq(topics.id, standaloneGasTopicId));
     await db.delete(telegramIntakeRecords).where(eq(telegramIntakeRecords.id, standaloneIntakeId));
+  });
+
+  it('remediates false-positive legal decree post in Ғозғонтепа МФЙ, cleanly deletes orphaned topic and projection, and marks intake record as EXCLUDED', async () => {
+    const gozTopicId = `top_goz_${Date.now()}`;
+    const gozEvidenceId = `evi_goz_${Date.now()}`;
+    const gozIntakeId = `intake_goz_${Date.now()}`;
+    const profile = await db.query.aiProfiles.findFirst();
+
+    await db.insert(telegramIntakeRecords).values({
+      id: gozIntakeId,
+      districtId,
+      mahallaName: 'Ғозғонтепа МФЙ',
+      source: 'BOT_API',
+      telegramBotId: 'bot_1',
+      telegramChatId: '-100999888',
+      telegramMessageId: '4001',
+      originalTimestamp: new Date(),
+      calendarDay: testCalendarDay,
+      rawPayload: {
+        text: 'Газ қачон келади, сув қачон келади... деб маҳалладан кимга савол берса бўлади? Энди маҳалла раиси аҳолининг коммунал хизматлар... муаммоларини ҳал қилади. ПФ - 116. Обуна бўлиш: телеграм',
+      },
+      status: 'ACCEPTED',
+    });
+
+    await db.insert(topics).values({
+      id: gozTopicId,
+      districtId,
+      mahallaName: 'Ғозғонтепа МФЙ',
+      calendarDay: testCalendarDay,
+      primaryLane: 'GAS',
+      status: 'ACTIVE',
+      latestRelevantEvidenceTimestamp: new Date(),
+      retentionExpiresAt: new Date(Date.now() + 86400000 * 30),
+      requiredDerivedGeneration: 1,
+      appliedDerivedGeneration: 1,
+    });
+
+    await db.insert(acceptedEvidence).values({
+      id: gozEvidenceId,
+      topicId: gozTopicId,
+      districtId,
+      mahallaName: 'Ғозғонтепа МФЙ',
+      calendarDay: testCalendarDay,
+      intakeRecordId: gozIntakeId,
+      telegramChatId: '-100999888',
+      telegramMessageId: '4001',
+      originalTimestamp: new Date(),
+      verbatimText:
+        'Газ қачон келади, сув қачон келади... деб маҳалладан кимга савол берса бўлади? Энди маҳалла раиси аҳолининг коммунал хизматлар... муаммоларини ҳал қилади. ПФ - 116. Обуна бўлиш: телеграм',
+      contentType: 'TEXT',
+    });
+
+    await db.insert(topicProjections).values({
+      id: `prj_goz_${Date.now()}`,
+      topicId: gozTopicId,
+      districtId,
+      mahallaName: 'Ғозғонтепа МФЙ',
+      calendarDay: testCalendarDay,
+      summary: 'Сув, газ ва электр таъминотида узилишлар хабар қилинмоқда.',
+      latestUpdate: null,
+      lanes: ['GAS', 'WATER', 'ELECTRICITY'],
+      primaryLane: 'GAS',
+      anchorEvidenceId: gozEvidenceId,
+      anchorQuote: 'Газ қачон келади, сув қачон келади',
+      latestMeaningfulActivityTimestamp: new Date(),
+      attribution: 'Маҳалла фуқароси',
+      isHokimRelated: false,
+      generation: 1,
+      aiProfileId: profile!.id,
+    });
+
+    const run = await remediateFalsePositiveEvidence(
+      { db, pool },
+      { execute: true, dryRun: false, skipAi: true, topicId: gozTopicId },
+    );
+
+    expect(run.matchedEvidenceCount).toBe(1);
+    expect(run.affectedTopicsCount).toBe(1);
+    expect(run.reports[0]?.reprojectionMode).toBe('TOPIC_DELETED');
+
+    // 1. Evidence must be completely deleted
+    const remainingEvidence = await db
+      .select()
+      .from(acceptedEvidence)
+      .where(eq(acceptedEvidence.topicId, gozTopicId));
+    expect(remainingEvidence.length).toBe(0);
+
+    // 2. Orphaned topic projection must be deleted
+    const remainingProjections = await db
+      .select()
+      .from(topicProjections)
+      .where(eq(topicProjections.topicId, gozTopicId));
+    expect(remainingProjections.length).toBe(0);
+
+    // 3. Orphaned topic itself must be cleanly deleted from topics table
+    const remainingTopics = await db
+      .select()
+      .from(topics)
+      .where(eq(topics.id, gozTopicId));
+    expect(remainingTopics.length).toBe(0);
+
+    // 4. Intake record must be marked EXCLUDED / GENERAL_CHATTER
+    const [updatedIntake] = await db
+      .select()
+      .from(telegramIntakeRecords)
+      .where(eq(telegramIntakeRecords.id, gozIntakeId));
+    expect(updatedIntake).toBeDefined();
+    expect(updatedIntake!.status).toBe('EXCLUDED');
+    const payload = updatedIntake!.rawPayload as Record<string, unknown>;
+    expect(payload.status).toBe('EXCLUDED');
+    expect(payload.exclusionReason).toBe('GENERAL_CHATTER');
+
+    // Clean up intake record
+    await db.delete(telegramIntakeRecords).where(eq(telegramIntakeRecords.id, gozIntakeId));
   });
 });
