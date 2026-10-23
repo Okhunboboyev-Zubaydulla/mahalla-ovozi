@@ -1654,7 +1654,7 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
       });
 
       // 3. Candidate arrives with unkeyed text
-      const candidateText = "Bizdayam yo'q";
+      const candidateText = 'Ha mayli unda';
       const candidateIntakeId = await createTestIntake(candidateText, '4003');
       await processCandidateJob(candidateIntakeId, candidateText, '4003');
 
@@ -1923,7 +1923,7 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
       });
 
       // 3. Candidate arrives with unkeyed text at 09:00 (10 mins after chatter)
-      const candidateText = "Bizdayam yo'q";
+      const candidateText = 'Ha mayli unda';
       const candidateIntakeId = await createTestIntake(candidateText, '8003');
       await processCandidateJob(candidateIntakeId, candidateText, '8003');
 
@@ -1982,7 +1982,7 @@ describe('Story 2.3: Worker Semantic Relevance 25-Row Verification Matrix Integr
 
       // 2. Candidate arrives today at 00:15 (25 minutes later, but calendarDay is 2026-08-22)
       const candidateIntakeId = `intk_candidate_today_${crypto.randomUUID()}`;
-      const candidateText = "Bizdayam yo'q";
+      const candidateText = 'Ha mayli unda';
       await db.insert(telegramIntakeRecords).values({
         id: candidateIntakeId,
         districtId: testDistrictId,

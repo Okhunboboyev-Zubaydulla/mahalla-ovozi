@@ -606,14 +606,96 @@ export function filterTelegramMessage(
   return { accepted: true, text: rawText };
 }
 
+/**
+ * Canonical Uzbek script normalizer for matching routines:
+ * - Unifies quote/apostrophe variants to single quote `'`
+ * - Normalizes Uzbek mobile keyboard diacritics/breves:
+ *   ŏ, ō, ö -> o'
+ *   ğ -> g'
+ *   yŭq, yūq, yüq -> yo'q
+ *   bŏpti, bōpti, böpti -> bo'pti
+ *   ŭ, ū, ü -> u
+ * - Normalizes colloquial SMS contractions (yuq/yoq -> yo'q, bopti -> bo'pti, uchdi/ucdi/ochdi -> o'chdi, etc.)
+ * - Normalizes multiple spaces and lowercases text
+ */
+export function normalizeUzbekScript(text: string): string {
+  if (!text || typeof text !== 'string') return '';
+  let normalized = text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\u0060\u00B4\u02B9\u02BA\u02BB\u02BC\u02BD\u02C8\u02CA\u2018\u2019\u201B\u2032\u2035]/g, "'");
+
+  // Mobile keyboard breves / umlauts / macrons
+  normalized = normalized.replace(/[ŏōö]/g, "o'");
+  normalized = normalized.replace(/[ğ]/g, "g'");
+  normalized = normalized.replace(/\by[ŭūü]q\b/g, "yo'q");
+  normalized = normalized.replace(/\bb[ŏōö]pti\b/g, "bo'pti");
+  normalized = normalized.replace(/[ŭūü]/g, 'u');
+
+  // SMS contractions & colloquial spellings
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:yuq|yoq)(?![\p{L}\p{N}'])/gu, "yo'q");
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:bopti)(?![\p{L}\p{N}'])/gu, "bo'pti");
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:uch|uc|och)di(?![\p{L}\p{N}'])/gu, "o'chdi");
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:uch|uc|och)ipti(?![\p{L}\p{N}'])/gu, "o'chipti");
+
+  // Cyrillic colloquial spellings
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:уч|уш)ди(?![\p{L}\p{N}'])/gu, "ўчди");
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:уч|уш)ипти(?![\p{L}\p{N}'])/gu, "ўчипти");
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:йук|йок)(?![\p{L}\p{N}'])/gu, "йўқ");
+  normalized = normalized.replace(/(?<![\p{L}\p{N}'])(?:бупти)(?![\p{L}\p{N}'])/gu, "бўпти");
+
+  // Whitespace normalization
+  return normalized.replace(/\s+/g, ' ').trim();
+}
+
+export const CIVIC_LANE_KEYWORD_REGEX =
+  /(?<![\p{L}\p{N}'])(?:raygaz|hududgaz|mingaz|gaz(?!el|on|et|in)[a-z']*|райгаз|ҳудудгаз|мингаз|газ(?!ель|он|ет|ин)[а-яёўқғҳ]*|svet(?!ofor)[a-z']*|свет(?!офор)[а-яёўқғҳ]*|svyet[a-z']*|свьет[а-яёўқғҳ]*|svit[a-z']*|свит[а-яёўқғҳ]*|chiro[qg][a-z']*|чиро[қк][а-яёўқғҳ]*|elektr[a-z']*|электр[а-яёўқғҳ]*|tok|ток|voltaj|вольтаж|napryajen[a-z']*|напряжен[а-яёўқғҳ]*|transformator[a-z']*|трансформатор[а-яёўқғҳ]*|suv(?!oq|arak)[a-z']*|сув(?!оқ|арак)[а-яёўқғҳ]*|vodoprovod[a-z']*|водопровод[а-яёўқғҳ]*|vodokanal[a-z']*|водоканал[а-яёўқғҳ]*|vodovoz[a-z']*|водовоз[а-яёўқғҳ]*|voda|вод[аыеуой][а-яёўқғҳ]*|kranta[a-z']*|кранта[а-яёўқғҳ]*|quvur[a-z']*|қувур[а-яёўқғҳ]*|truba[a-z']*|труба[а-яёўқғҳ]*|kanalizats[a-z']*|канализаци[а-яёўқғҳ]*|lyuk[a-z']*|люк[а-яёўқғҳ]*|nasos[a-z']*|насос[а-яёўқғҳ]*|musor[a-z']*|мусор[а-яёўқғҳ]*|musr[a-z']*|муср[а-яёўқғҳ]*|musir[a-z']*|мусир[а-яёўқғҳ]*|chiqindi[a-z']*|чиқинди[а-яёўқғҳ]*|axlat[a-z']*|ахлат[а-яёўқғҳ]*|svalka[a-z']*|свалка[а-яёўқғҳ]*|toza\s+hudud|тоза\s+ҳудуд|maxsustrans[a-z']*|махсустранс[а-яёўқғҳ]*|asfalt[a-z']*|асфальт[а-яёўқғҳ]*|ko'cha[a-z']*|кўча[а-яёўқғҳ]*|yo'l[a-z']*|йўл[а-яёўқғҳ]*|дорог[а-яёўқғҳ]*|hokim[a-z']*|ҳоким[а-яёўқғҳ]*|хоким[а-яёўқғҳ]*|xokim[a-z']*|hokimiyat[a-z']*|ҳокимият[а-яёўқғҳ]*|hokimlik[a-z']*|ҳокимлик[а-яёўқғҳ]*|tepadagilar[a-z']*|тепадагилар[а-яёўқғҳ]*|yuqoridagilar[a-z']*|юқоридагилар[а-яёўқғҳ]*|mas'ul[a-z']*|масъул[а-яёўқғҳ]*)(?![\p{L}\p{N}'])/iu;
+
+/**
+ * Pure domain predicate evaluating whether text contains at least one keyword matching
+ * any of the 5 canonical civic lanes (Gaz, Elektr, Suv, Chiqindi, Hokimiyat) across
+ * Uzbek Latin, Uzbek Cyrillic, and basic Russian equivalents.
+ *
+ * Uses Unicode boundary matching and canonical script normalization to eliminate
+ * false-positive substring collisions while matching open roots and inflected suffixes.
+ */
+export function matchesCivicLaneKeyword(text: string): boolean {
+  if (!text || typeof text !== 'string') {
+    return false;
+  }
+  const normalized = normalizeUzbekScript(text);
+  if (normalized.length === 0) {
+    return false;
+  }
+  return CIVIC_LANE_KEYWORD_REGEX.test(normalized);
+}
+
+export const CONTEXTUAL_FOLLOW_UP_REGEX =
+  /(?<![\p{L}\p{N}'])(?:remont[a-z']*|ta'mir[a-z']*|profilaktik[a-z']*|avariy[a-z']*|uchipti|ochipti|o'chipti|o'chibdi|o'chyapti|o'chdi|o'chgan|yo'q|past|bosim|siz[a-z']*|oqyapti|oqib|qachon|nega|nimaga|qayerda|qaysi|yonadimi|beradimi|keladimi|berishadi|bopti|bo'pti|bo'lyapti|bo'ldi|nima\s+bo'|bizdayam|bizda\s+ham|ремонт[а-яёўқғҳ]*|таъмир[а-яёўқғҳ]*|профилактик[а-яёўқғҳ]*|авария[а-яёўқғҳ]*|ўчипти|ўчибди|ўчяпти|ўчди|ўчган|йўқ|паст|босим|сиз[а-яёўқғҳ]*|оқяпти|оқиб|қачон|нега|нимага|қаерда|қайси|ёнадими|берадими|келадими|беришади|бўпти|бўляпти|бўлди|нима\s+бў|биздаям|бизда\s+ҳам)(?![\p{L}\p{N}'])/iu;
+
+/**
+ * Evaluates whether text contains a conversational follow-up signal that describes
+ * outage causes or asks about repairs/restorations without repeating the utility noun.
+ */
+export function hasContextualFollowUpSignal(text: string): boolean {
+  if (!text || typeof text !== 'string') {
+    return false;
+  }
+  const normalized = normalizeUzbekScript(text);
+  if (normalized.length === 0) {
+    return false;
+  }
+  return CONTEXTUAL_FOLLOW_UP_REGEX.test(normalized);
+}
+
 const CIVIC_SUBJECT_REGEX =
-  /(?:^|[^\p{L}\p{N}_])(svet|chiroq|elektr|tok|voltaj|napryajeni|suv|vodoprovod|kranta|gaz|musor|musr|musir|chiqindi|axlat|truba|quvur|kanalizatsiy[a-z]*|lyuk|yo['`ʻʼ]?l|ko['`ʻʼ]?cha|asfalt|transformator|hokim|xokim|hokimiyat|hokimlik|свет|чироқ|электр|ток|вольтаж|напряжени|сув|водопровод|кранта|вода|воды|газ|мусор|мусир|чиқинди|ахлат|труба|қувур|канализаци[а-я]*|люк|йўл|кўча|асфальт|трансформатор|дорог[а-я]|ҳоким|ҳокимият|ҳокимлик)(?:$|[^\p{L}\p{N}_])/iu;
+  /(?<![\p{L}\p{N}'])(?:raygaz|hududgaz|mingaz|gaz(?!el|on|et|in)[a-z']*|райгаз|ҳудудгаз|мингаз|газ(?!ель|он|ет|ин)[а-яёўқғҳ]*|svet(?!ofor)[a-z']*|свет(?!офор)[а-яёўқғҳ]*|svyet[a-z']*|свьет[а-яёўқғҳ]*|svit[a-z']*|свит[а-яёўқғҳ]*|chiro[qg][a-z']*|чиро[қк][а-яёўқғҳ]*|elektr[a-z']*|электр[а-яёўқғҳ]*|tok|ток|voltaj|вольтаж|napryajen[a-z']*|напряжен[а-яёўқғҳ]*|transformator[a-z']*|трансформатор[а-яёўқғҳ]*|suv(?!oq|arak)[a-z']*|сув(?!оқ|арак)[а-яёўқғҳ]*|vodoprovod[a-z']*|водопровод[а-яёўқғҳ]*|vodokanal[a-z']*|водоканал[а-яёўқғҳ]*|vodovoz[a-z']*|водовоз[а-яёўқғҳ]*|voda|вод[аыеуой][а-яёўқғҳ]*|kranta[a-z']*|кранта[а-яёўқғҳ]*|quvur[a-z']*|қувур[а-яёўқғҳ]*|truba[a-z']*|труба[а-яёўқғҳ]*|kanalizats[a-z']*|канализаци[а-яёўқғҳ]*|lyuk[a-z']*|люк[а-яёўқғҳ]*|nasos[a-z']*|насос[а-яёўқғҳ]*|musor[a-z']*|мусор[а-яёўқғҳ]*|musr[a-z']*|муср[а-яёўқғҳ]*|musir[a-z']*|мусир[а-яёўқғҳ]*|chiqindi[a-z']*|чиқинди[а-яёўқғҳ]*|axlat[a-z']*|ахлат[а-яёўқғҳ]*|svalka[a-z']*|свалка[а-яёўқғҳ]*|toza\s+hudud|тоза\s+ҳудуд|maxsustrans[a-z']*|махсустранс[а-яёўқғҳ]*|asfalt[a-z']*|асфальт[а-яёўқғҳ]*|ko'cha[a-z']*|кўча[а-яёўқғҳ]*|yo'l[a-z']*|йўл[а-яёўқғҳ]*|дорог[а-яёўқғҳ]*|hokim[a-z']*|ҳоким[а-яёўқғҳ]*|хоким[а-яёўқғҳ]*|xokim[a-z']*|hokimiyat[a-z']*|ҳокимият[а-яёўқғҳ]*|hokimlik[a-z']*|ҳокимлик[а-яёўқғҳ]*|tepadagilar[a-z']*|тепадагилар[а-яёўқғҳ]*|yuqoridagilar[a-z']*|юқоридагилар[а-яёўқғҳ]*|mas'ul[a-z']*|масъул[а-яёўқғҳ]*)(?![\p{L}\p{N}'])/iu;
 
 const CIVIC_PREDICATE_REGEX =
-  /(?:^|[^\p{L}\p{N}_])(o['`ʻʼ]?chdi|o['`ʻʼ]?chgan|yo['`ʻʼ]?q|yo['`ʻʼ]?qligi|kelmadi|kemadi|kemapti|kelmaganiga|kemaganiga|kemibdi|past|bosim|yorildi|teshildi|oqyapti|oqib|to['`ʻʼ]?lib|toshdi|yonmadi|kuydi|uzildi|buzildi|qachon|bo['`ʻʼ]?ladimi|bormi|yotibdi|[ўу]чди|[ўу]чган|йўқ|келмади|кемади|кемибди|кемаганига|келмаган[а-я]*|паст|босим|ёрилди|тешилди|оқяпти|оқиб|тўлиб|тошди|ёнмади|куйди|узилди|бузилди|йотибди|ётибди|[қк]ачон|[бўу]+ладими|борми|нет|отключили|прорвало|когда|будет|давление|не\s+горит|потух|течет|забилось)(?:$|[^\p{L}\p{N}_])/iu;
+  /(?<![\p{L}\p{N}'])(?:remont[a-z']*|ta'mir[a-z']*|profilaktik[a-z']*|avariy[a-z']*|uchipti|ochipti|o'chipt[a-z']*|o'chibd[a-z']*|o'chyapt[a-z']*|o'chd[a-z']*|o'chgan[a-z']*|yo'q|yo'qligi|kelmadi|kemadi|kemapti|kelmaganiga|kemaganiga|kemibdi|past|bosim|siz[a-z']*|chiq(?:a?yapt[a-z']*|ib[a-z']*|d[a-z']+|ipt[a-z']*|madi|mayapt[a-z']*)|oqyapti|oqib|yorildi|teshildi|portladi|to'xtab|to'lib|toshdi|yonmadi|kuydi|uzildi|buzildi|qachon|nega|nimaga|qayerda|qaysi|yonadimi|beradimi|keladimi|berishadi|bo'ladimi|bormi|yotibdi|bopti|bo'pti|bo'lyapti|bo'ldi|nima\s+bo'|bizdayam|bizda\s+ham|ремонт[а-яёўқғҳ]*|таъмир[а-яёўқғҳ]*|профилактик[а-яёўқғҳ]*|авария[а-яёўқғҳ]*|[ўу]чипт[а-яёўқғҳ]*|[ўу]чибд[а-яёўқғҳ]*|[ўу]чяпт[а-яёўқғҳ]*|[ўу]чд[а-яёўқғҳ]*|[ўу]чган[а-яёўқғҳ]*|йўқ|келмади|кемади|кемибди|кемаганига|келмаган[а-я]*|паст|босим|сиз[а-яёўқғҳ]*|чиқ(?:а?япт[а-яёўқғҳ]*|иб[а-яёўқғҳ]*|д[а-яёўқғҳ]+|ипт[а-яёўқғҳ]*|мади|маяпт[а-яёўқғҳ]*)|оқяпти|оқиб|ёрилди|тешилди|портлади|тўхтаб|тўлиб|тошди|ёнмади|куйди|узилди|бузилди|йотибди|ётибди|[қк]ачон|нега|нимага|[қк]аерда|[қк]айси|ёнадими|берадими|келадими|беришади|[бўу]+ладими|борми|бўпти|бўляпти|бўлди|нима\s+бў|биздаям|бизда\s+ҳам|нет|отключили|прорвало|когда|будет|давление|не\s+горит|потух|течет|забилось)(?![\p{L}\p{N}'])/iu;
 
 const COMPOUND_CIVIC_REGEX =
-  /(?:^|[^\p{L}\p{N}_])(suvsizlik|gazsizlik|svetsizlik|chiroqsizlik|elektrsizlik|сувсизлик|газсизлик|светсизлик|чироқсизлик|электрсизлик|чиқиндилар|мусорлар|мусирлар|musirlar)/iu;
+  /(?<![\p{L}\p{N}'])(?:suvsizlik|gazsizlik|svetsizlik|chiroqsizlik|elektrsizlik|сувсизлик|газсизлик|светсизлик|чироқсизлик|электрсизлик|чиқиндилар|мусорлар|мусирлар|musirlar)[a-zа-яёўқғҳ']*(?![\p{L}\p{N}'])/iu;
 
 /**
  * Checks whether text contains an independent, self-contained municipal civic signal
@@ -621,32 +703,10 @@ const COMPOUND_CIVIC_REGEX =
  */
 export function hasSelfContainedCivicSignal(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return false;
-  if (COMPOUND_CIVIC_REGEX.test(trimmed)) return true;
-  return CIVIC_SUBJECT_REGEX.test(trimmed) && CIVIC_PREDICATE_REGEX.test(trimmed);
-}
-
-export const CIVIC_LANE_KEYWORD_REGEX =
-  /(?:^|[^\p{L}\p{N}])(gaz(?!el|on)[a-z]*|газ(?!ель|он)[а-я]*|svet[a-z]*|свет[а-я]*|svyet[a-z]*|свьет[а-я]*|chiro[qg]['`ʻʼ]?[a-z]*|чиро[қк][а-я]*|elektr[a-z]*|электр[а-я]*|tok|ток|voltaj|вольтаж|napryajeni[a-z]*|напряжени[а-я]*|suv(?!oq|arak)[a-z]*|сув(?!оқ|арак)[а-я]*|voda|вод[аыеуой][а-я]*|водопровод[а-я]*|vodoprovod[a-z]*|kanalizatsiy[a-z]*|канализаци[а-я]*|truba[a-z]*|труба[а-я]*|musor[a-z]*|мусор[а-я]*|musr[a-z]*|муср[а-я]*|musir[a-z]*|мусир[а-я]*|chiqindi[a-z]*|чиқинди[а-я]*|axlat[a-z]*|ахлат[а-я]*|svalka[a-z]*|свалка[а-я]*|hokim[a-z]*|ҳоким[а-я]*|хоким[а-я]*|xokim[a-z]*|tepadagilar[a-z]*|тепадагилар[а-я]*|yuqoridagilar[a-z]*|юқоридагилар[а-я]*|mas['`ʻʼ]?ul[a-z]*|масъул[а-я]*)(?:$|[^\p{L}\p{N}])/iu;
-
-/**
- * Pure domain predicate evaluating whether text contains at least one keyword matching
- * any of the 5 canonical civic lanes (Gaz, Elektr, Suv, Chiqindi, Hokimiyat) across
- * Uzbek Latin, Uzbek Cyrillic, and basic Russian equivalents.
- *
- * Uses boundary matching to strictly eliminate false-positive substring collisions
- * (e.g. 'magazin', 'suvoqchi', 'gazel', 'gazon', 'suvarak').
- */
-export function matchesCivicLaneKeyword(text: string): boolean {
-  if (!text || typeof text !== 'string') {
-    return false;
-  }
-  const trimmed = text.trim();
-  if (trimmed.length === 0) {
-    return false;
-  }
-  return CIVIC_LANE_KEYWORD_REGEX.test(trimmed);
+  const normalized = normalizeUzbekScript(text);
+  if (normalized.length === 0) return false;
+  if (COMPOUND_CIVIC_REGEX.test(normalized)) return true;
+  return CIVIC_SUBJECT_REGEX.test(normalized) && CIVIC_PREDICATE_REGEX.test(normalized);
 }
 
 

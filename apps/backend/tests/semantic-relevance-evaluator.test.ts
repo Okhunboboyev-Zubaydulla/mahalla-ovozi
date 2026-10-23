@@ -3438,7 +3438,176 @@ describe('Semantic Relevance Domain Evaluator & Contracts Unit Tests', () => {
           // Institutional & Legal Decree Explainers / General News
           expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('INSTITUTIONAL & LEGAL DECREE EXPLAINERS / GENERAL NEWS');
           expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('ПФ-116');
+
+          // Milestone 1 & 3: High-Level Invariance & Context Principles
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('MORPHOLOGICAL, DIALECT & SCRIPT INVARIANCE PRINCIPLE');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('CONTEXTUAL THREAD INHERITANCE VS. TOPIC SHIFT PRINCIPLE');
         });
+      });
+    });
+
+    describe('Milestones 1-3: High-Level Semantic Relevance Architecture Refactor', () => {
+      const createEmptySnapshot = (): MahallaDailySnapshot => ({
+        districtId: 'dist_act_123',
+        mahallaName: 'Navbahor',
+        calendarDay: '2026-10-23',
+        contextRevision: 1,
+        snapshotFingerprint: 'fp_empty',
+        evidence: [],
+      });
+
+      it('formats prompt with ACTIVE OUTAGE CONVERSATION when interveningCount <= 5 during active window (<= 20m)', () => {
+        const prompt = evaluator.buildUserPrompt({
+          candidateText: 'Ремонт.',
+          telegramMessageId: '7002',
+          originalTimestamp: '2026-10-23T10:12:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+          chatContinuity: {
+            interveningCount: 2,
+            precedingRelevantMessage: {
+              telegramMessageId: '7000',
+              originalTimestamp: '2026-10-23T10:05:00.000Z',
+              verbatimText: 'Bizdayam yŭq nima bŏpti gazga... Nega ŏchipti gaz',
+              lane: 'GAS',
+            },
+          },
+        });
+
+        expect(prompt).toContain('### CHAT CONTINUITY STATUS (ACTIVE OUTAGE CONVERSATION)');
+        expect(prompt).toContain('Earlier Civic Disruption: MsgID 7000 (+7m before candidate) (Lane: [GAS])');
+        expect(prompt).toContain('Earlier Disruption Text: "Bizdayam yŭq nima bŏpti gazga... Nega ŏchipti gaz"');
+        expect(prompt).toContain('2 recent reaction(s)/chatter message(s) occurred in chat during this active outage window');
+        expect(prompt).not.toContain('Conversational Continuity: BROKEN');
+      });
+
+      it('renders multi-hop reply chain and recent chat transcript window', () => {
+        const prompt = evaluator.buildUserPrompt({
+          candidateText: 'Qayerda avariya ekan yana',
+          telegramMessageId: '8003',
+          originalTimestamp: '2026-10-23T10:15:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: {
+            replyToMessageId: '8002',
+          },
+          parentReplyContext: {
+            parentMessageId: '8002',
+            parentStatus: 'RELEVANT',
+            parentLanes: ['GAS'],
+            parentVerbatimText: 'Ремонт.',
+          },
+          replyChain: [
+            { messageId: '8002', status: 'RELEVANT', lanes: ['GAS'], text: 'Ремонт.' },
+            { messageId: '8001', status: 'RELEVANT', lanes: ['GAS'], text: 'Газ сизиб чиқаяптийкан' },
+          ],
+          recentChatTranscript: [
+            { messageId: '8001', senderId: 'user1', text: 'Газ сизиб чиқаяптийкан', status: 'COMPLETED_RELEVANT', lanes: ['GAS'], timestamp: '2026-10-23T10:00:00.000Z' },
+            { messageId: '8002', senderId: 'user2', text: 'Ха.айтманг', status: 'EXCLUDED', timestamp: '2026-10-23T10:02:00.000Z' },
+            { messageId: '8003', senderId: 'user3', text: 'Ремонт.', status: 'COMPLETED_RELEVANT', lanes: ['GAS'], timestamp: '2026-10-23T10:05:00.000Z' },
+          ],
+          snapshot: createEmptySnapshot(),
+        });
+
+        expect(prompt).toContain('### REPLY CONTEXT (PARENT IS ACCEPTED CIVIC ISSUE)');
+        expect(prompt).toContain('Parent Verbatim Text: "Ремонт."');
+        expect(prompt).toContain('### REPLY CHAIN (UP TO 3 HOPS)');
+        expect(prompt).toContain('1. Message ID 8002 (Status: RELEVANT [GAS]): "Ремонт."');
+        expect(prompt).toContain('2. Message ID 8001 (Status: RELEVANT [GAS]): "Газ сизиб чиқаяптийкан"');
+        expect(prompt).toContain('### RECENT CHAT TRANSCRIPT WINDOW (CHRONOLOGICAL)');
+        expect(prompt).toContain('ID:8001 [user1] [COMPLETED_RELEVANT:GAS]: "Газ сизиб чиқаяптийкан"');
+        expect(prompt).toContain('ID:8002 [user2] [EXCLUDED]: "Ха.айтманг"');
+      });
+
+      it('evaluates Kuyovboshi MFY messages and follow-ups with contextual inheritance', async () => {
+        // Message 1: Gas outage complaint with mobile diacritics
+        mockAdapter.setNextResponse({
+          is_relevant: true,
+          relevant_lanes: ['GAS'],
+          exclusion_reason: null,
+          accepted_message_ids: ['9001'],
+          reasoning: 'Gas supply outage inquiry with mobile keyboard diacritics',
+        });
+
+        const res1 = await evaluator.evaluateRelevance({
+          candidateText: 'Bizdayam yŭq nima bŏpti gazga... Nega ŏchipti gaz',
+          telegramMessageId: '9001',
+          originalTimestamp: '2026-10-23T10:00:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+        expect(res1.data.is_relevant).toBe(true);
+        expect(res1.data.relevant_lanes).toEqual(['GAS']);
+
+        // Message 2: Contextual follow-up explaining cause (Ремонт.)
+        mockAdapter.setNextResponse({
+          is_relevant: true,
+          relevant_lanes: ['GAS'],
+          exclusion_reason: null,
+          accepted_message_ids: ['9002'],
+          reasoning: 'Follow-up explaining gas outage cause as maintenance repair',
+        });
+
+        const res2 = await evaluator.evaluateRelevance({
+          candidateText: 'Ремонт.',
+          telegramMessageId: '9002',
+          originalTimestamp: '2026-10-23T10:05:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+          chatContinuity: {
+            interveningCount: 1,
+            precedingRelevantMessage: {
+              telegramMessageId: '9001',
+              originalTimestamp: '2026-10-23T10:00:00.000Z',
+              verbatimText: 'Bizdayam yŭq nima bŏpti gazga... Nega ŏchipti gaz',
+              lane: 'GAS',
+            },
+          },
+        });
+        expect(res2.data.is_relevant).toBe(true);
+        expect(res2.data.relevant_lanes).toEqual(['GAS']);
+
+        // Message 3: Gas leak in Kuyovboshi MFY (Газ сизиб чиқаяптийкан)
+        mockAdapter.setNextResponse({
+          is_relevant: true,
+          relevant_lanes: ['GAS'],
+          exclusion_reason: null,
+          accepted_message_ids: ['9003'],
+          reasoning: 'Gas leak hazard in neighborhood',
+        });
+
+        const res3 = await evaluator.evaluateRelevance({
+          candidateText: 'Газ сизиб чиқаяптийкан',
+          telegramMessageId: '9003',
+          originalTimestamp: '2026-10-23T10:10:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+        expect(res3.data.is_relevant).toBe(true);
+        expect(res3.data.relevant_lanes).toEqual(['GAS']);
+
+        // Edge case: Standalone traffic accident in quiet chat -> EXCLUDED
+        mockAdapter.setNextResponse({
+          is_relevant: false,
+          relevant_lanes: [],
+          exclusion_reason: 'GENERAL_CHATTER',
+          accepted_message_ids: [],
+          reasoning: 'Traffic accident not involving public municipal utility',
+        });
+
+        const res4 = await evaluator.evaluateRelevance({
+          candidateText: 'Машина авария бўпти',
+          telegramMessageId: '9004',
+          originalTimestamp: '2026-10-23T12:00:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+        expect(res4.data.is_relevant).toBe(false);
+        expect(res4.data.exclusion_reason).toBe('GENERAL_CHATTER');
       });
     });
   });

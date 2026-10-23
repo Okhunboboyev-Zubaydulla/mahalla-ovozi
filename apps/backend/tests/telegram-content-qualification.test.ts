@@ -9,6 +9,8 @@ import {
   extractForwardOriginMetadata,
   hasSelfContainedCivicSignal,
   matchesCivicLaneKeyword,
+  normalizeUzbekScript,
+  hasContextualFollowUpSignal,
   CIVIC_LANE_KEYWORD_REGEX,
   type TelegramMessage,
   type TelegramIntakeRecordInput,
@@ -1139,6 +1141,128 @@ describe('Story 2.2: Telegram Content Qualification Engine Unit Tests', () => {
         expect(matchesCivicLaneKeyword('ТЕПАДАГИЛАР')).toBe(true);
         expect(matchesCivicLaneKeyword('YUQORIDAGILAR')).toBe(true);
         expect(matchesCivicLaneKeyword('ЮҚОРИДАГИЛАР')).toBe(true);
+      });
+    });
+  });
+
+  describe('Milestone 1: Canonical Uzbek Script Normalization & Open Civic Roots', () => {
+    describe('normalizeUzbekScript', () => {
+      it('normalizes various apostrophe/quote variants to standard single quote', () => {
+        expect(normalizeUzbekScript("ko`cha koʻcha koʼcha ko‘cha ko’cha koˈcha koˊcha ko′cha")).toBe(
+          "ko'cha ko'cha ko'cha ko'cha ko'cha ko'cha ko'cha ko'cha",
+        );
+      });
+
+      it('normalizes mobile keyboard diacritics and breves (ŏ, ō, ö -> o\', yŭq -> yo\'q, bŏpti -> bo\'pti)', () => {
+        expect(normalizeUzbekScript('ŏchdi ōchdi ödigan')).toBe("o'chdi o'chdi o'digan");
+        expect(normalizeUzbekScript('yŭq yūq yüq')).toBe("yo'q yo'q yo'q");
+        expect(normalizeUzbekScript('bŏpti bōpti böpti')).toBe("bo'pti bo'pti bo'pti");
+        expect(normalizeUzbekScript('Bizdayam yŭq nima bŏpti gazga... Nega ŏchipti gaz')).toBe(
+          "bizdayam yo'q nima bo'pti gazga... nega o'chipti gaz",
+        );
+      });
+
+      it('normalizes common SMS contractions and colloquial forms', () => {
+        expect(normalizeUzbekScript('yuq yoq bopti uchdi ucdi ochdi uchipti')).toBe(
+          "yo'q yo'q bo'pti o'chdi o'chdi o'chdi o'chipti",
+        );
+      });
+    });
+
+    describe('Open Civic Roots matching', () => {
+      it('matches open roots for Gas across Latin and Cyrillic', () => {
+        expect(matchesCivicLaneKeyword('raygaz')).toBe(true);
+        expect(matchesCivicLaneKeyword('hududgaz')).toBe(true);
+        expect(matchesCivicLaneKeyword('mingaz')).toBe(true);
+        expect(matchesCivicLaneKeyword('gazimiz')).toBe(true);
+        expect(matchesCivicLaneKeyword('райгаз')).toBe(true);
+        expect(matchesCivicLaneKeyword('ҳудудгаз')).toBe(true);
+        expect(matchesCivicLaneKeyword('мингаз')).toBe(true);
+        expect(matchesCivicLaneKeyword('газимиз')).toBe(true);
+        // Exclusions
+        expect(matchesCivicLaneKeyword('gazeta')).toBe(false);
+        expect(matchesCivicLaneKeyword('газета')).toBe(false);
+        expect(matchesCivicLaneKeyword('gazon')).toBe(false);
+        expect(matchesCivicLaneKeyword('газон')).toBe(false);
+        expect(matchesCivicLaneKeyword('gazel')).toBe(false);
+        expect(matchesCivicLaneKeyword('газель')).toBe(false);
+      });
+
+      it('matches open roots for Electricity across Latin and Cyrillic', () => {
+        expect(matchesCivicLaneKeyword('chiroq')).toBe(true);
+        expect(matchesCivicLaneKeyword('chirogimiz')).toBe(true);
+        expect(matchesCivicLaneKeyword('elektr')).toBe(true);
+        expect(matchesCivicLaneKeyword('tok')).toBe(true);
+        expect(matchesCivicLaneKeyword('voltaj')).toBe(true);
+        expect(matchesCivicLaneKeyword('napryajeniya')).toBe(true);
+        expect(matchesCivicLaneKeyword('transformator')).toBe(true);
+        expect(matchesCivicLaneKeyword('свет')).toBe(true);
+        expect(matchesCivicLaneKeyword('чироқ')).toBe(true);
+        expect(matchesCivicLaneKeyword('электр')).toBe(true);
+        expect(matchesCivicLaneKeyword('вольтаж')).toBe(true);
+        expect(matchesCivicLaneKeyword('трансформатор')).toBe(true);
+        // Exclusions
+        expect(matchesCivicLaneKeyword('svetofor')).toBe(false);
+        expect(matchesCivicLaneKeyword('светофор')).toBe(false);
+      });
+
+      it('matches open roots for Water across Latin and Cyrillic', () => {
+        expect(matchesCivicLaneKeyword('vodokanal')).toBe(true);
+        expect(matchesCivicLaneKeyword('vodovoz')).toBe(true);
+        expect(matchesCivicLaneKeyword('vodoprovod')).toBe(true);
+        expect(matchesCivicLaneKeyword('quvur')).toBe(true);
+        expect(matchesCivicLaneKeyword('truba')).toBe(true);
+        expect(matchesCivicLaneKeyword('kanalizatsiya')).toBe(true);
+        expect(matchesCivicLaneKeyword('lyuk')).toBe(true);
+        expect(matchesCivicLaneKeyword('nasos')).toBe(true);
+        expect(matchesCivicLaneKeyword('водоканал')).toBe(true);
+        expect(matchesCivicLaneKeyword('водовоз')).toBe(true);
+        expect(matchesCivicLaneKeyword('водопровод')).toBe(true);
+        expect(matchesCivicLaneKeyword('қувур')).toBe(true);
+        expect(matchesCivicLaneKeyword('труба')).toBe(true);
+        expect(matchesCivicLaneKeyword('люк')).toBe(true);
+        expect(matchesCivicLaneKeyword('насос')).toBe(true);
+      });
+
+      it('matches open roots for Waste and Road across Latin and Cyrillic', () => {
+        expect(matchesCivicLaneKeyword('toza hudud')).toBe(true);
+        expect(matchesCivicLaneKeyword('maxsustrans')).toBe(true);
+        expect(matchesCivicLaneKeyword('тоза ҳудуд')).toBe(true);
+        expect(matchesCivicLaneKeyword('махсустранс')).toBe(true);
+        expect(matchesCivicLaneKeyword('asfalt')).toBe(true);
+        expect(matchesCivicLaneKeyword("ko'chamiz")).toBe(true);
+        expect(matchesCivicLaneKeyword("yo'llar")).toBe(true);
+        expect(matchesCivicLaneKeyword('асфальт')).toBe(true);
+        expect(matchesCivicLaneKeyword('кўчамиз')).toBe(true);
+        expect(matchesCivicLaneKeyword('йўллар')).toBe(true);
+      });
+    });
+
+    describe('hasContextualFollowUpSignal', () => {
+      it('matches contextual outage and repair follow-ups in Latin and Cyrillic', () => {
+        expect(hasContextualFollowUpSignal('Ремонт.')).toBe(true);
+        expect(hasContextualFollowUpSignal('Qayerda avariya ekan yana')).toBe(true);
+        expect(hasContextualFollowUpSignal("Bizdayam yo'q")).toBe(true);
+        expect(hasContextualFollowUpSignal("Nega o'chdi")).toBe(true);
+        expect(hasContextualFollowUpSignal('қачон беришади?')).toBe(true);
+        expect(hasContextualFollowUpSignal('профилактика бўляптими')).toBe(true);
+        expect(hasContextualFollowUpSignal('таъмир ишлари кетмоқда')).toBe(true);
+      });
+
+      it('returns false for general chatter without follow-up signals', () => {
+        expect(hasContextualFollowUpSignal('Ха.айтманг')).toBe(false);
+        expect(hasContextualFollowUpSignal('Salom hammaga')).toBe(false);
+        expect(hasContextualFollowUpSignal('Rahmat kattakon')).toBe(false);
+        expect(hasContextualFollowUpSignal("Ertaga ko'rishamiz")).toBe(false);
+      });
+    });
+
+    describe('hasSelfContainedCivicSignal with normalized scripts and stems', () => {
+      it('returns true for prompt-specified edge cases', () => {
+        expect(hasSelfContainedCivicSignal('Газ сизиб чиқаяптийкан')).toBe(true);
+        expect(
+          hasSelfContainedCivicSignal('Bizdayam yŭq nima bŏpti gazga... Nega ŏchipti gaz'),
+        ).toBe(true);
       });
     });
   });

@@ -98,6 +98,24 @@ export interface ParentReplyContext {
   parentStatus: 'RELEVANT' | 'EXCLUDED' | 'NOT_FOUND' | 'PENDING';
   parentExclusionReason?: string | null;
   parentVerbatimText?: string | null;
+  parentLanes?: string[] | null;
+}
+
+export interface ReplyChainAncestor {
+  messageId: string | number;
+  text?: string | null;
+  status: string;
+  lanes?: string[] | null;
+}
+
+export interface ChatTranscriptMessage {
+  messageId: string | number;
+  senderId?: string | null;
+  text: string;
+  status?: string | null;
+  lanes?: string[] | null;
+  timestamp: Date | string;
+  replyToId?: string | number | null;
 }
 
 export interface EvaluateRelevanceInput {
@@ -116,6 +134,8 @@ export interface EvaluateRelevanceInput {
   immediatePrecedingMessage?: PrecedingMessageContext | null;
   chatContinuity?: ChatContinuityContext | null;
   parentReplyContext?: ParentReplyContext | null;
+  replyChain?: ReplyChainAncestor[] | null;
+  recentChatTranscript?: ChatTranscriptMessage[] | null;
 }
 
 export { SEMANTIC_RELEVANCE_SYSTEM_PROMPT };
@@ -170,23 +190,42 @@ ${authorReports}
 - BOUNDARY: The candidate must express an active municipal failure, grievance, or service fee dispute. Pure domestic chatter ("ovqat tayyormi"), greetings ("salom"), or private sales inquiries remain EXCLUDED.`);
     }
 
-    if (input.parentReplyContext && input.parentReplyContext.parentStatus === 'EXCLUDED') {
-      const parentReason = input.parentReplyContext.parentExclusionReason || 'NON_CIVIC_CHAT';
-      const excerpt = input.parentReplyContext.parentVerbatimText
-        ? `\n- Parent Verbatim Text: "${input.parentReplyContext.parentVerbatimText.slice(0, 150)}"`
-        : '';
-      sections.push(`### REPLY CONTEXT (PARENT IS CONFIRMED NON-CIVIC MESSAGE)
-- Reply To Message ID: ${input.parentReplyContext.parentMessageId} (Status: EXCLUDED / ${parentReason})${excerpt}
-- CRITICAL ISOLATION RULE: The parent message is a non-civic chat/ad. The candidate MUST contain an independent, self-contained municipal problem report to qualify. If its meaning depends on or replies to the non-civic parent, exclude it as ${parentReason === 'ADVERTISEMENT_OR_SPAM' ? 'ADVERTISEMENT_OR_SPAM' : 'GENERAL_CHATTER'}.`);
-    } else if (input.replyMetadata) {
-      if (input.replyMetadata.replyToIsForwarded) {
-        sections.push(`### REPLY CONTEXT
+    if (input.replyMetadata?.replyToIsForwarded) {
+      sections.push(`### REPLY CONTEXT
 - Note: This message is a reply to a Telegram-forwarded parent message.
 - Isolation Rule: The parent message is excluded and not provided. The candidate message MUST contain a self-contained civic signal to qualify. If its meaning depends on the missing forwarded parent, exclude it as UNRESOLVED_AMBIGUOUS_FRAGMENT.`);
+    } else if (input.parentReplyContext) {
+      const parent = input.parentReplyContext;
+      const laneStr = parent.parentLanes && parent.parentLanes.length > 0 ? ` (Lanes: [${parent.parentLanes.join(', ')}])` : '';
+      const textStr = parent.parentVerbatimText ? `\n- Parent Verbatim Text: "${parent.parentVerbatimText}"` : '';
+
+      if (parent.parentStatus === 'RELEVANT') {
+        sections.push(`### REPLY CONTEXT (PARENT IS ACCEPTED CIVIC ISSUE)
+- Reply To Message ID: ${parent.parentMessageId} (Status: RELEVANT${laneStr})${textStr}
+- CONTEXTUAL INHERITANCE: The candidate replies directly to a verified municipal disruption report. Contextual follow-ups (confirming outage, asking causes or restoration ETA like "Qachon beradi", "Bizdayam yo'q", "Ремонт.", "Qayerda avariya ekan yana") inherit the parent's civic issue lane (${parent.parentLanes?.join(', ') || 'Parent Lane'}).`);
+      } else if (parent.parentStatus === 'EXCLUDED') {
+        const parentReason = parent.parentExclusionReason || 'NON_CIVIC_CHAT';
+        sections.push(`### REPLY CONTEXT (PARENT IS CONFIRMED NON-CIVIC MESSAGE)
+- Reply To Message ID: ${parent.parentMessageId} (Status: EXCLUDED / ${parentReason})${textStr}
+- CRITICAL ISOLATION RULE: The parent message is a non-civic chat/ad. The candidate MUST contain an independent, self-contained municipal problem report to qualify. If its meaning depends on or replies to the non-civic parent, exclude it as ${parentReason === 'ADVERTISEMENT_OR_SPAM' ? 'ADVERTISEMENT_OR_SPAM' : 'GENERAL_CHATTER'}.`);
       } else {
         sections.push(`### REPLY CONTEXT
-- Reply To Message ID: ${input.replyMetadata.replyToMessageId}`);
+- Reply To Message ID: ${parent.parentMessageId} (Status: ${parent.parentStatus})${textStr}`);
       }
+    } else if (input.replyMetadata) {
+      sections.push(`### REPLY CONTEXT
+- Reply To Message ID: ${input.replyMetadata.replyToMessageId}`);
+    }
+
+    if (input.replyChain && input.replyChain.length > 1) {
+      const chainItems = input.replyChain
+        .map((hop, idx) => {
+          const laneStr = hop.lanes && hop.lanes.length > 0 ? ` [${hop.lanes.join(', ')}]` : '';
+          const textStr = hop.text ? ` "${hop.text}"` : ' (Text unavailable)';
+          return `  ${idx + 1}. Message ID ${hop.messageId} (Status: ${hop.status}${laneStr}):${textStr}`;
+        })
+        .join('\n');
+      sections.push(`### REPLY CHAIN (UP TO 3 HOPS)\n${chainItems}`);
     }
 
     // Extract Immediate Preceding Message or Chat Continuity
@@ -233,13 +272,23 @@ ${authorReports}
         ? "SAME SENDER AS CANDIDATE (Author Continuity applies - see AUTHOR'S PRIOR SAME-DAY CIVIC CONTEXT)"
         : 'DIFFERENT SENDER (Third-party message - strict anti-latching applies)';
 
-      sections.push(`### CHAT CONTINUITY STATUS (INTERRUPTED THREAD)
+      if (diffMinutes !== null && diffMinutes <= 20 && continuity.interveningCount <= 5) {
+        sections.push(`### CHAT CONTINUITY STATUS (ACTIVE OUTAGE CONVERSATION)
+- Earlier Civic Disruption: MsgID ${precedingMsg.telegramMessageId}${diffText}${laneText}
+- Earlier Disruption Text: "${precedingMsg.verbatimText}"
+- Context: ${continuity.interveningCount} recent reaction(s)/chatter message(s) occurred in chat during this active outage window.
+- Explicit Reply Target: ${replyTargetText}
+- RULE: Contextual follow-ups (corroborating the outage, asking restoration times, or discussing causes like "Ремонт.", "Qayerda avariya ekan yana", "Bizdayam yo'q") inherit the active outage lane (${precedingMsg.lane || 'Utility Lane'}). Only completely off-topic messages (unrelated sales, ads, private matters) should be excluded.`);
+      } else {
+        sections.push(`### CHAT CONTINUITY STATUS (INTERRUPTED THREAD)
 - Earlier Civic Evidence: MsgID ${precedingMsg.telegramMessageId}${diffText}${laneText}
+- Earlier Disruption Text: "${precedingMsg.verbatimText}"
 - Sender of Earlier Evidence: ${senderRelationText}
 - Intervening Unrelated Messages: ${continuity.interveningCount} message(s) occurred in chat between earlier civic evidence and candidate
 - Conversational Continuity: BROKEN (Thread interrupted by unrelated chat)
 - Explicit Reply Target: ${replyTargetText}
 - RULE: Candidate must be fully self-contained UNLESS sent by the same resident continuing their earlier civic grievance. Vague fragments from third parties without municipal keywords MUST be excluded as UNRESOLVED_AMBIGUOUS_FRAGMENT.`);
+      }
     } else if (precedingMsg) {
       const candidateTime = new Date(input.originalTimestamp).getTime();
       const prevTime = new Date(precedingMsg.originalTimestamp).getTime();
@@ -253,6 +302,19 @@ ${authorReports}
 - Message ID: ${precedingMsg.telegramMessageId}${diffText}${laneText}
 - Timestamp: ${precedingMsg.originalTimestamp}
 - Text: "${precedingMsg.verbatimText}"`);
+    }
+
+    if (input.recentChatTranscript && input.recentChatTranscript.length > 0) {
+      const transcriptLines = input.recentChatTranscript
+        .map((m) => {
+          const sender = m.senderId ? ` [${m.senderId}]` : '';
+          const reply = m.replyToId ? ` (reply to ${m.replyToId})` : '';
+          const status = m.status ? ` [${m.status}${m.lanes && m.lanes.length > 0 ? `:${m.lanes.join(',')}` : ''}]` : '';
+          const time = m.timestamp instanceof Date ? m.timestamp.toISOString().slice(11, 19) : String(m.timestamp).slice(11, 19);
+          return `- [${time}] ID:${m.messageId}${sender}${reply}${status}: "${m.text}"`;
+        })
+        .join('\n');
+      sections.push(`### RECENT CHAT TRANSCRIPT WINDOW (CHRONOLOGICAL)\n${transcriptLines}`);
     }
 
     sections.push(formatSnapshotForSemanticRelevance(input.snapshot));
