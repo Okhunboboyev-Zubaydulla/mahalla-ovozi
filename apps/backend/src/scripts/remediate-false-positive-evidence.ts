@@ -19,6 +19,7 @@
  *   # Apply remediation to database:
  *   pnpm --filter @mahalla-ovozi/backend exec tsx src/scripts/remediate-false-positive-evidence.ts --execute
  */
+import 'dotenv/config';
 import crypto from 'node:crypto';
 import type pg from 'pg';
 import type PgBoss from 'pg-boss';
@@ -61,6 +62,7 @@ export interface FalsePositiveRule {
   lane: QualifyingLane | 'ANY';
   mahallaKeywords: string[];
   messagePatterns: RegExp[];
+  negativePatterns?: RegExp[];
   exclusionReason: string;
   reasoning: string;
 }
@@ -105,6 +107,45 @@ export const FALSE_POSITIVE_RULES: FalsePositiveRule[] = [
     ],
     exclusionReason: 'GENERAL_CHATTER',
     reasoning: 'Ушбу хабар ПФ-116 фармони бўйича ҳуқуқий тушунтириш ва ахборот бўлиб, коммунал авария ёки узилиш хабари эмас.',
+  },
+  {
+    targetLabel: 'AUTOMOTIVE_FUEL_STATION',
+    lane: 'ANY',
+    mahallaKeywords: [],
+    messagePatterns: [
+      // Operating hours / status inquiries:
+      /(?:metan|propan|zapra[fv]ka|агнкс|агзс|запра[fv]ка|метан|пропан)\s*.*?(?:ishl(?:e|aya)ptimi|ishlaydimi|ishledimi|ochildimi|ochiqmi|yopildimi|yopiqmi|boshlandimi|ишлаяптими|ишлептими|ишлайдими|очилдими|очиқми|ёпилдими|ёпиқми)/iu,
+      /(?:ishl(?:e|aya)ptimi|ishlaydimi|ishledimi|ochildimi|ochiqmi|yopildimi|yopiqmi|ишлаяптими|ишлептими|очилдими|очиқми)\s*.*?(?:metan|propan|zapra[fv]ka|агнкс|агзс|запра[fv]ка|метан|пропан)/iu,
+      // Pump pressure inquiries:
+      /(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)\s*.*?(?:davleni[yaе]|давлени[яе])/iu,
+      /(?:davleni[yaе]|давлени[яе])\s*.*?(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)/iu,
+      // Queue / waiting inquiries (turnir, ochered, navbat):
+      /(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)\s*.*?(?:turnir|ochered|ochirit|navbat|турнир|очередь|очеред|навбат)/iu,
+      /(?:turnir|ochered|ochirit|navbat|турнир|очередь|очеред|навбат)\s*.*?(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)/iu,
+      // Commercial fuel station dispensing / availability:
+      /(?:zapra[fv]ka(?:da)?|запра[fv]ка(?:да)?)\s+(?:gaz|benzin|metan|propan|газ|бензин|метан|пропан)\s+(?:bormi|keldimi|quy(?:a|ilya)ptimi|борми|келдими|қуй)/iu,
+      /(?:benzin|metan|propan|бензин|метан|пропан)\s+(?:bormi|keldimi|борми|келдими)\s+.*?(?:zapra[fv]ka|запра[fv]ка)/iu,
+      /(?:gaz|metan|benzin|propan)\s+zapra[fv]ka/iu,
+      /(?:газ|метан|бензин|пропан)\s+запра[fv]ка/iu,
+      // General short queries about metan / station status:
+      /^(?:gaz\s+)?zapra[fv]ka\s+(?:ishleptimi|ishlayaptimi|ochildimi)\s*(?:bilganlar\s+aytvorila)?/iu,
+      /^(?:metan|propan)\s+(?:ochildimi|ochiqmi|ishleptimi|ishlayaptimi|bormi)\??$/iu,
+      /^(?:zapra[fv]kada\s+)?turnir\s+bormi\??$/iu,
+    ],
+    negativePatterns: [
+      // 1. Spatial landmark indicators (station used as reference point for surroundings)
+      /(?:zapra[fv]ka|metan|propan|запра[fv]ка|метан|пропан)(?:ning)?\s+(?:orqasi|yoni|ro[''`ʻ]?parasi|qarshisi|atrofi|yaqini|oldi|burchagi|tegida|tomon|орқаси|ёни|рўпараси|қаршиси|атрофи|яқини|олди|бурчаги|томон)/iu,
+      /(?:orqasi|yoni|ro[''`ʻ]?parasi|qarshisi|atrofi|yaqini|oldi|burchagi|tegida|орқаси|ёни|рўпараси|қаршиси|атрофи|яқини|олди|бурчаги)(?:dagi|da)?\s+(?:zapra[fv]ka|metan|propan|запра[fv]ка|метан|пропан)/iu,
+      // 2. Residential context in conjunction with outage/disruption terms
+      /(?:mahalla|ko[''`ʻ]?cha|dom|uy(?:imiz)?|xonadon|kvartira|маҳалла|кўча|дом|уй|хонадон|квартира)\w*\s+.*?(?:o[''`ʻ]?chdi|ochdi|yo[''`ʻ]?q|yoq|kesildi|uzildi|bosim\s*(?:juda\s*)?past|ўчди|йўқ|кесилди|узилди|босим\s*(?:жуда\s*)?паст)/iu,
+      /(?:o[''`ʻ]?chdi|ochdi|yo[''`ʻ]?q|yoq|kesildi|uzildi|bosim\s*(?:juda\s*)?past|ўчди|йўқ|кесилди|узилди|босим\s*(?:жуда\s*)?паст)\w*\s+.*?(?:mahalla|ko[''`ʻ]?cha|dom|uy(?:imiz)?|xonadon|kvartira|маҳалла|кўча|дом|уй|хонадон|квартира)/iu,
+      // 3. Specific combined residential defect phrases
+      /(?:domda|mahallada|ko[''`ʻ]?chada|uyda|хонадонда|домда|маҳаллада|кўчада|уйда)\s+.*?(?:svet|gaz|suv|ток|чироқ|свет|газ|сув)/iu,
+      /(?:svet|gaz|suv|ток|чироқ|свет|газ|сув)\s+.*?(?:domda|mahallada|ko[''`ʻ]?chada|uyda|хонадонда|домда|маҳаллада|кўчада|уйда)/iu,
+    ],
+    exclusionReason: 'GENERAL_CHATTER',
+    reasoning:
+      'Ушбу хабар автомобилларга ёқилғи қуйиш шохобчаси (заправка/метан/пропан/бензин) бўйича тижорий сўров бўлиб, аҳоли коммунал инфратузилмасидаги узилишга алоқадор эмас.',
   },
 ];
 
@@ -212,7 +253,12 @@ export function matchFalsePositiveRule(
     const laneMatches = rule.lane === 'ANY' || rule.lane === primaryLane;
 
     // Must match either the mahalla or lane + pattern
-    if (mahallaMatches || laneMatches) {
+    if (rule.mahallaKeywords.length === 0 || mahallaMatches || laneMatches) {
+      // Protect spatial landmarks and residential outages if rule defines negative patterns
+      if (rule.negativePatterns && rule.negativePatterns.some((pattern) => pattern.test(verbatimText))) {
+        continue;
+      }
+
       const textMatches = rule.messagePatterns.some((pattern) => pattern.test(verbatimText));
       if (textMatches) {
         return rule;

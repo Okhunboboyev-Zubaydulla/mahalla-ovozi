@@ -3442,6 +3442,14 @@ describe('Semantic Relevance Domain Evaluator & Contracts Unit Tests', () => {
           // Milestone 1 & 3: High-Level Invariance & Context Principles
           expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('MORPHOLOGICAL, DIALECT & SCRIPT INVARIANCE PRINCIPLE');
           expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('CONTEXTUAL THREAD INHERITANCE VS. TOPIC SHIFT PRINCIPLE');
+
+          // Automotive Vehicle Fuel Stations vs Residential Municipal Utilities
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('Commercial Vehicle Fuel & Filling Stations');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('AGNKs');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('zapravkada davleniya bormi');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('zapravkada turnir bormi?');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain('gaz zaprafka ishleptimi bilganlar aytvorila');
+          expect(SEMANTIC_RELEVANCE_SYSTEM_PROMPT).toContain("zapravka orqasidagi ko'chada gaz bosimi juda past");
         });
       });
     });
@@ -3490,6 +3498,8 @@ describe('Semantic Relevance Domain Evaluator & Contracts Unit Tests', () => {
           contentType: 'TEXT',
           replyMetadata: {
             replyToMessageId: '8002',
+            replyToIsForwarded: false,
+            replyToIsBot: false,
           },
           parentReplyContext: {
             parentMessageId: '8002',
@@ -3608,6 +3618,137 @@ describe('Semantic Relevance Domain Evaluator & Contracts Unit Tests', () => {
         });
         expect(res4.data.is_relevant).toBe(false);
         expect(res4.data.exclusion_reason).toBe('GENERAL_CHATTER');
+      });
+    });
+
+    describe('Automotive Vehicle Fuel Stations vs Residential Municipal Utilities', () => {
+      const createEmptySnapshot = (): MahallaDailySnapshot => ({
+        districtId: 'dist_act_123',
+        mahallaName: 'Navbahor',
+        calendarDay: '2026-10-26',
+        contextRevision: 1,
+        snapshotFingerprint: 'fp_empty',
+        evidence: [],
+      });
+
+      it('excludes vehicle filling station operating hours inquiry ("gaz zaprafka ishleptimi bilganlar aytvorila") as GENERAL_CHATTER', async () => {
+        mockAdapter.setNextResponse({
+          is_relevant: false,
+          relevant_lanes: [],
+          exclusion_reason: 'GENERAL_CHATTER',
+          accepted_message_ids: [],
+          reasoning: 'Commercial vehicle filling station operating hours inquiry',
+        });
+
+        const res = await evaluator.evaluateRelevance({
+          candidateText: 'gaz zaprafka ishleptimi bilganlar aytvorila',
+          telegramMessageId: '10001',
+          originalTimestamp: '2026-10-26T08:00:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+
+        expect(res.data.is_relevant).toBe(false);
+        expect(res.data.exclusion_reason).toBe('GENERAL_CHATTER');
+        expect(res.data.relevant_lanes).toEqual([]);
+        expect(res.data.accepted_message_ids).toEqual([]);
+      });
+
+      it('excludes vehicle filling station pump pressure inquiry ("metan zapravkada davleniya qanaqa?") as GENERAL_CHATTER', async () => {
+        mockAdapter.setNextResponse({
+          is_relevant: false,
+          relevant_lanes: [],
+          exclusion_reason: 'GENERAL_CHATTER',
+          accepted_message_ids: [],
+          reasoning: 'Commercial vehicle pump pressure inquiry, not communal pipeline gas',
+        });
+
+        const res = await evaluator.evaluateRelevance({
+          candidateText: 'metan zapravkada davleniya qanaqa?',
+          telegramMessageId: '10002',
+          originalTimestamp: '2026-10-26T08:05:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+
+        expect(res.data.is_relevant).toBe(false);
+        expect(res.data.exclusion_reason).toBe('GENERAL_CHATTER');
+        expect(res.data.relevant_lanes).toEqual([]);
+        expect(res.data.accepted_message_ids).toEqual([]);
+      });
+
+      it('excludes vehicle filling station queue/turnir inquiry ("zapravkada turnir bormi?") as GENERAL_CHATTER', async () => {
+        mockAdapter.setNextResponse({
+          is_relevant: false,
+          relevant_lanes: [],
+          exclusion_reason: 'GENERAL_CHATTER',
+          accepted_message_ids: [],
+          reasoning: 'Commercial vehicle filling station queue inquiry',
+        });
+
+        const res = await evaluator.evaluateRelevance({
+          candidateText: 'zapravkada turnir bormi?',
+          telegramMessageId: '10003',
+          originalTimestamp: '2026-10-26T08:10:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+
+        expect(res.data.is_relevant).toBe(false);
+        expect(res.data.exclusion_reason).toBe('GENERAL_CHATTER');
+        expect(res.data.relevant_lanes).toEqual([]);
+        expect(res.data.accepted_message_ids).toEqual([]);
+      });
+
+      it('qualifies residential gas low pressure when filling station is used as spatial landmark ("zapravka orqasidagi ko\'chada gaz bosimi juda past")', async () => {
+        mockAdapter.setNextResponse({
+          is_relevant: true,
+          relevant_lanes: ['GAS'],
+          exclusion_reason: null,
+          accepted_message_ids: ['10004'],
+          reasoning: 'Residential street gas low pressure defect; filling station serves purely as spatial anchor',
+        });
+
+        const res = await evaluator.evaluateRelevance({
+          candidateText: "zapravka orqasidagi ko'chada gaz bosimi juda past",
+          telegramMessageId: '10004',
+          originalTimestamp: '2026-10-26T08:15:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+
+        expect(res.data.is_relevant).toBe(true);
+        expect(res.data.exclusion_reason).toBeNull();
+        expect(res.data.relevant_lanes).toEqual(['GAS']);
+        expect(res.data.accepted_message_ids).toEqual(['10004']);
+      });
+
+      it('qualifies residential electricity outage when filling station is used as spatial landmark ("metan zapravka yonidagi mahallada svet o\'chdi")', async () => {
+        mockAdapter.setNextResponse({
+          is_relevant: true,
+          relevant_lanes: ['ELECTRICITY'],
+          exclusion_reason: null,
+          accepted_message_ids: ['10005'],
+          reasoning: 'Residential electricity outage in neighborhood; filling station is purely a spatial anchor',
+        });
+
+        const res = await evaluator.evaluateRelevance({
+          candidateText: "metan zapravka yonidagi mahallada svet o'chdi",
+          telegramMessageId: '10005',
+          originalTimestamp: '2026-10-26T08:20:00.000Z',
+          contentType: 'TEXT',
+          replyMetadata: null,
+          snapshot: createEmptySnapshot(),
+        });
+
+        expect(res.data.is_relevant).toBe(true);
+        expect(res.data.exclusion_reason).toBeNull();
+        expect(res.data.relevant_lanes).toEqual(['ELECTRICITY']);
+        expect(res.data.accepted_message_ids).toEqual(['10005']);
       });
     });
   });

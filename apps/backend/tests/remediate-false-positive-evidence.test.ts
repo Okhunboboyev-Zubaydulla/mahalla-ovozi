@@ -301,6 +301,87 @@ describe('Integration Tests: Remediation of Erroneous Messages in Client Dashboa
     expect(match7).not.toBeNull();
     expect(match7?.exclusionReason).toBe('GENERAL_CHATTER');
 
+    // Automotive fuel station false-positive queries (AUTOMOTIVE_FUEL_STATION)
+    const matchFuel1 = matchFalsePositiveRule(
+      'gaz zaprafka ishleptimi bilganlar aytvorila',
+      'Оқтепа МФЙ',
+      'GAS',
+    );
+    expect(matchFuel1).not.toBeNull();
+    expect(matchFuel1?.targetLabel).toBe('AUTOMOTIVE_FUEL_STATION');
+    expect(matchFuel1?.exclusionReason).toBe('GENERAL_CHATTER');
+
+    const matchFuel2 = matchFalsePositiveRule(
+      'metan zapravkada davleniya qanaqa?',
+      'Янгиобод МФЙ',
+      'GAS',
+    );
+    expect(matchFuel2).not.toBeNull();
+    expect(matchFuel2?.targetLabel).toBe('AUTOMOTIVE_FUEL_STATION');
+    expect(matchFuel2?.exclusionReason).toBe('GENERAL_CHATTER');
+
+    const matchFuel3 = matchFalsePositiveRule(
+      'zapravkada turnir bormi?',
+      'Чилонзор МФЙ',
+      'GAS',
+    );
+    expect(matchFuel3).not.toBeNull();
+    expect(matchFuel3?.targetLabel).toBe('AUTOMOTIVE_FUEL_STATION');
+    expect(matchFuel3?.exclusionReason).toBe('GENERAL_CHATTER');
+
+    const matchFuel4 = matchFalsePositiveRule(
+      'zapravkada davleniya bormi',
+      'Дўстлик МФЙ',
+      'GAS',
+    );
+    expect(matchFuel4).not.toBeNull();
+    expect(matchFuel4?.targetLabel).toBe('AUTOMOTIVE_FUEL_STATION');
+
+    const matchFuel5 = matchFalsePositiveRule(
+      'metan ochildimi',
+      'Наврўз МФЙ',
+      'GAS',
+    );
+    expect(matchFuel5).not.toBeNull();
+    expect(matchFuel5?.targetLabel).toBe('AUTOMOTIVE_FUEL_STATION');
+
+    const matchFuel6 = matchFalsePositiveRule(
+      'zapravkada benzin bormi',
+      'Улуғбек МФЙ',
+      'GAS',
+    );
+    expect(matchFuel6).not.toBeNull();
+    expect(matchFuel6?.targetLabel).toBe('AUTOMOTIVE_FUEL_STATION');
+
+    // Spatial landmarks & residential outages near fuel stations must be protected (return null)
+    const landmarkGas = matchFalsePositiveRule(
+      "zapravka orqasidagi ko'chada gaz bosimi juda past",
+      'Оқтепа МФЙ',
+      'GAS',
+    );
+    expect(landmarkGas).toBeNull();
+
+    const landmarkElec = matchFalsePositiveRule(
+      "metan zapravka yonidagi mahallada svet o'chdi",
+      'Янгиобод МФЙ',
+      'ELECTRICITY',
+    );
+    expect(landmarkElec).toBeNull();
+
+    const landmarkDom = matchFalsePositiveRule(
+      "zapravka ro'parasidagi domda gaz yo'q",
+      'Чилонзор МФЙ',
+      'GAS',
+    );
+    expect(landmarkDom).toBeNull();
+
+    const landmarkWater = matchFalsePositiveRule(
+      "zapravka oldidagi ko'chada suv quvuri yorildi, suv toshib yotibdi",
+      'Дўстлик МФЙ',
+      'WATER',
+    );
+    expect(landmarkWater).toBeNull();
+
     // Genuine civic disruption messages must NOT match
     const genuineElec = matchFalsePositiveRule(
       'Трансформатор ёниб кетди, свет йўқ',
