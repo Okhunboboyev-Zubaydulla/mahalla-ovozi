@@ -114,28 +114,28 @@ export const FALSE_POSITIVE_RULES: FalsePositiveRule[] = [
     mahallaKeywords: [],
     messagePatterns: [
       // Operating hours / status inquiries:
-      /(?:metan|propan|zapra[fv]ka|агнкс|агзс|запра[fv]ка|метан|пропан)\s*.*?(?:ishl(?:e|aya)ptimi|ishlaydimi|ishledimi|ochildimi|ochiqmi|yopildimi|yopiqmi|boshlandimi|ишлаяптими|ишлептими|ишлайдими|очилдими|очиқми|ёпилдими|ёпиқми)/iu,
-      /(?:ishl(?:e|aya)ptimi|ishlaydimi|ishledimi|ochildimi|ochiqmi|yopildimi|yopiqmi|ишлаяптими|ишлептими|очилдими|очиқми)\s*.*?(?:metan|propan|zapra[fv]ka|агнкс|агзс|запра[fv]ка|метан|пропан)/iu,
+      /(?:metan|propan|zapi?ra[fv]ka|агнкс|агзс|запи?ра[вф]ка|метан|пропан)\s*.*?(?:ishl(?:e|aya|i)ptimi|ishlaydimi|ishledimi|ochildimi|ochiqmi|yopildimi|yopiqmi|boshlandimi|ишлаяптими|ишлептими|ишлиптими|ишлиптими|ишлайдими|очилдими|очиқми|ёпилдими|ёпиқми)/iu,
+      /(?:ishl(?:e|aya|i)ptimi|ishlaydimi|ishledimi|ochildimi|ochiqmi|yopildimi|yopiqmi|ишлаяптими|ишлептими|ишлиптими|очилдими|очиқми)\s*.*?(?:metan|propan|zapi?ra[fv]ka|агнкс|агзс|запи?ра[вф]ка|метан|пропан)/iu,
       // Pump pressure inquiries:
-      /(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)\s*.*?(?:davleni[yaе]|давлени[яе])/iu,
-      /(?:davleni[yaе]|давлени[яе])\s*.*?(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)/iu,
+      /(?:zapi?ra[fv]ka|metan|propan|агнкс|агзс|запи?ра[вф]ка|метан|пропан)\s*.*?(?:davleni[yaе]|давлени[яе])/iu,
+      /(?:davleni[yaе]|давлени[яе])\s*.*?(?:zapi?ra[fv]ka|metan|propan|агнкс|агзс|запи?ра[вф]ка|метан|пропан)/iu,
       // Queue / waiting inquiries (turnir, ochered, navbat):
-      /(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)\s*.*?(?:turnir|ochered|ochirit|navbat|турнир|очередь|очеред|навбат)/iu,
-      /(?:turnir|ochered|ochirit|navbat|турнир|очередь|очеред|навбат)\s*.*?(?:zapra[fv]ka|metan|propan|агнкс|агзс|запра[fv]ка|метан|пропан)/iu,
+      /(?:zapi?ra[fv]ka|metan|propan|агнкс|агзс|запи?ра[вф]ка|метан|пропан)\s*.*?(?:turnir|ochered|ochirit|navbat|турнир|очередь|очеред|навбат)/iu,
+      /(?:turnir|ochered|ochirit|navbat|турнир|очередь|очеред|навбат)\s*.*?(?:zapi?ra[fv]ka|metan|propan|агнкс|агзс|запи?ра[вф]ка|метан|пропан)/iu,
       // Commercial fuel station dispensing / availability:
-      /(?:zapra[fv]ka(?:da)?|запра[fv]ка(?:да)?)\s+(?:gaz|benzin|metan|propan|газ|бензин|метан|пропан)\s+(?:bormi|keldimi|quy(?:a|ilya)ptimi|борми|келдими|қуй)/iu,
-      /(?:benzin|metan|propan|бензин|метан|пропан)\s+(?:bormi|keldimi|борми|келдими)\s+.*?(?:zapra[fv]ka|запра[fv]ка)/iu,
-      /(?:gaz|metan|benzin|propan)\s+zapra[fv]ka/iu,
-      /(?:газ|метан|бензин|пропан)\s+запра[fv]ка/iu,
+      /(?:zapi?ra[fv]ka(?:da)?|запи?ра[вф]ка(?:да)?)\s+(?:gaz|benzin|metan|propan|газ|бензин|метан|пропан)\s+(?:bormi|keldimi|quy(?:a|ilya)ptimi|борми|келдими|қуй)/iu,
+      /(?:benzin|metan|propan|бензин|метан|пропан)\s+(?:bormi|keldimi|борми|келдими)\s+.*?(?:zapi?ra[fv]ka|запи?ра[вф]ка)/iu,
+      /(?:gaz|metan|benzin|propan)\s+zapi?ra[fv]ka/iu,
+      /(?:газ|метан|бензин|пропан)\s+запи?ра[вф]ка/iu,
       // General short queries about metan / station status:
-      /^(?:gaz\s+)?zapra[fv]ka\s+(?:ishleptimi|ishlayaptimi|ochildimi)\s*(?:bilganlar\s+aytvorila)?/iu,
+      /^(?:gaz\s+)?zapi?ra[fv]ka\s+(?:ishleptimi|ishlayaptimi|ochildimi)\s*(?:bilganlar\s+aytvorila)?/iu,
       /^(?:metan|propan)\s+(?:ochildimi|ochiqmi|ishleptimi|ishlayaptimi|bormi)\??$/iu,
-      /^(?:zapra[fv]kada\s+)?turnir\s+bormi\??$/iu,
+      /^(?:zapi?ra[fv]kada\s+)?turnir\s+bormi\??$/iu,
     ],
     negativePatterns: [
       // 1. Spatial landmark indicators (station used as reference point for surroundings)
-      /(?:zapra[fv]ka|metan|propan|запра[fv]ка|метан|пропан)(?:ning)?\s+(?:orqasi|yoni|ro[''`ʻ]?parasi|qarshisi|atrofi|yaqini|oldi|burchagi|tegida|tomon|орқаси|ёни|рўпараси|қаршиси|атрофи|яқини|олди|бурчаги|томон)/iu,
-      /(?:orqasi|yoni|ro[''`ʻ]?parasi|qarshisi|atrofi|yaqini|oldi|burchagi|tegida|орқаси|ёни|рўпараси|қаршиси|атрофи|яқини|олди|бурчаги)(?:dagi|da)?\s+(?:zapra[fv]ka|metan|propan|запра[fv]ка|метан|пропан)/iu,
+      /(?:zapi?ra[fv]ka|metan|propan|запи?ра[вф]ка|метан|пропан)(?:ning)?\s+(?:orqasi|yoni|ro[''`ʻ]?parasi|qarshisi|atrofi|yaqini|oldi|burchagi|tegida|tomon|орқаси|ёни|рўпараси|қаршиси|атрофи|яқини|олди|бурчаги|томон)/iu,
+      /(?:orqasi|yoni|ro[''`ʻ]?parasi|qarshisi|atrofi|yaqini|oldi|burchagi|tegida|орқаси|ёни|рўпараси|қаршиси|атрофи|яқини|олди|бурчаги)(?:dagi|da)?\s+(?:zapi?ra[fv]ka|metan|propan|запи?ра[вф]ка|метан|пропан)/iu,
       // 2. Residential context in conjunction with outage/disruption terms
       /(?:mahalla|ko[''`ʻ]?cha|dom|uy(?:imiz)?|xonadon|kvartira|маҳалла|кўча|дом|уй|хонадон|квартира)\w*\s+.*?(?:o[''`ʻ]?chdi|ochdi|yo[''`ʻ]?q|yoq|kesildi|uzildi|bosim\s*(?:juda\s*)?past|ўчди|йўқ|кесилди|узилди|босим\s*(?:жуда\s*)?паст)/iu,
       /(?:o[''`ʻ]?chdi|ochdi|yo[''`ʻ]?q|yoq|kesildi|uzildi|bosim\s*(?:juda\s*)?past|ўчди|йўқ|кесилди|узилди|босим\s*(?:жуда\s*)?паст)\w*\s+.*?(?:mahalla|ko[''`ʻ]?cha|dom|uy(?:imiz)?|xonadon|kvartira|маҳалла|кўча|дом|уй|хонадон|квартира)/iu,
